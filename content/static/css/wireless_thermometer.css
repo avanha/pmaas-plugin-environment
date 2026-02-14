@@ -1,0 +1,93 @@
+.entity-environment-wireless-thermometer {
+
+}
+
+.entity-environment-wireless-thermometer .title-row {
+    display: flex;
+    flex-flow: row nowrap;
+    /*gap: 5px;*/
+}
+
+.entity-environment-wireless-thermometer .title-row .name {
+    flex: 1;
+    font-size: 15pt;
+}
+
+.entity-environment-wireless-thermometer .title-row .rssi-data {
+    color: grey;
+}
+
+.entity-environment-wireless-thermometer .title-row .battery-data {
+    color: grey;
+    margin-left: 5px;
+}
+
+.entity-environment-wireless-thermometer .title-row .battery-data .value::after {
+    content: "%";
+}
+
+.entity-environment-wireless-thermometer .sensor-data {
+    display: flex;
+    flex-flow: row nowrap;
+    color: #6fb5c7;
+    align-items: baseline;
+    font-size: 15pt;
+}
+
+.entity-environment-wireless-thermometer .sensor-data div:not(:first-child) {
+    margin-left: 20px;
+}
+
+.entity-environment-wireless-thermometer .sensor-data .temp-celsius {
+    font-size: 20pt;
+}
+
+.entity-environment-wireless-thermometer .sensor-data .temp-fahrenheit {
+    margin-left: 10px !important;
+}
+
+.entity-environment-wireless-thermometer .sensor-data .timestamp {
+    flex: 5 1 auto;
+    text-align: right;
+    font-size: 11pt;
+    color: grey;
+}
+
+
+.entity-environment-wireless-thermometer .sensor-data .temperature {
+    display: flex;
+    flex: 1;
+    flex-flow: row nowrap;
+    /*gap: 5px;*/
+    align-items: baseline;
+    text-wrap: nowrap;
+}
+
+.entity-environment-wireless-thermometer .extremes {
+    display: flex;
+    flex-flow: column;
+}
+
+.entity-environment-wireless-thermometer .extremes .temp div:not(:first-child) {
+    margin-left: 10px;
+}
+
+.entity-environment-wireless-thermometer .extremes .temp {
+    display: flex;
+    flex-flow: row nowrap;
+}
+
+.entity-environment-wireless-thermometer .extremes .temp.high {
+    color: darkred;
+}
+
+.entity-environment-wireless-thermometer .extremes .temp.low {
+    color: darkblue;
+}
+
+.entity-environment-wireless-thermometer .extremes .timestamp {
+    color: grey;
+    flex: 5 1 auto;
+    text-align: right;
+    font-size: 11pt;
+}
