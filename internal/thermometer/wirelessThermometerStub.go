@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"pmaas.io/plugins/environment/entities"
-	"pmaas.io/spi/common"
-	"pmaas.io/spi/tracking"
+	"github.com/avanha/pmaas-plugin-environment/entities"
+	"github.com/avanha/pmaas-spi/common"
+	"github.com/avanha/pmaas-spi/tracking"
 )
 
 type wirelessThermometerStub struct {

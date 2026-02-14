@@ -3,8 +3,8 @@ package environment
 import (
 	"testing"
 
-	"pmaas.io/plugins/environment/internal/thermometer"
-	"pmaas.io/spi/tracking"
+	"github.com/avanha/pmaas-plugin-environment/internal/thermometer"
+	"github.com/avanha/pmaas-spi/tracking"
 )
 
 func TestWirelessThermometer_ImplementsExpectedInterfaces(t *testing.T) {

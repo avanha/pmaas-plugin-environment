@@ -5,14 +5,14 @@ import (
 	"reflect"
 	"time"
 
-	"pmaas.io/plugins/environment/data"
-	"pmaas.io/plugins/environment/entities"
-	"pmaas.io/plugins/environment/internal/wrapper"
-	"pmaas.io/spi"
-	spicommon "pmaas.io/spi/common"
-	spienvironment "pmaas.io/spi/environment"
-	spievents "pmaas.io/spi/events"
-	"pmaas.io/spi/tracking"
+	"github.com/avanha/pmaas-plugin-environment/data"
+	"github.com/avanha/pmaas-plugin-environment/entities"
+	"github.com/avanha/pmaas-plugin-environment/internal/wrapper"
+	"github.com/avanha/pmaas-spi"
+	spicommon "github.com/avanha/pmaas-spi/common"
+	spienvironment "github.com/avanha/pmaas-spi/environment"
+	spievents "github.com/avanha/pmaas-spi/events"
+	"github.com/avanha/pmaas-spi/tracking"
 )
 
 func CreateWirelessThermometer(

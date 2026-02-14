@@ -1,8 +1,8 @@
 package entities
 
 import (
-	"pmaas.io/plugins/environment/internal/common"
-	"pmaas.io/spi/tracking"
+	"github.com/avanha/pmaas-plugin-environment/internal/common"
+	"github.com/avanha/pmaas-spi/tracking"
 )
 
 type Thermometer interface {

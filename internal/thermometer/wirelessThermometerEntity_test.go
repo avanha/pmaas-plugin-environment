@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	data "pmaas.io/plugins/environment/data"
-	"pmaas.io/spi/tracking"
+	data "github.com/avanha/pmaas-plugin-environment/data"
+	"github.com/avanha/pmaas-spi/tracking"
 )
 
 func TestWirelessThermometer_TrackingConfig(t *testing.T) {

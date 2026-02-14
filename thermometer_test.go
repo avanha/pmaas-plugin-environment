@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	spienvironment "pmaas.io/spi/environment"
-	"pmaas.io/spi/tracking"
+	spienvironment "github.com/avanha/pmaas-spi/environment"
+	"github.com/avanha/pmaas-spi/tracking"
 )
 
 func TestThermometer_ImplementsExpectedInterfaces(t *testing.T) {

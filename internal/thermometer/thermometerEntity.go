@@ -3,10 +3,10 @@ package thermometer
 import (
 	"time"
 
-	"pmaas.io/plugins/environment/data"
-	"pmaas.io/plugins/environment/internal/wrapper"
-	spienvironment "pmaas.io/spi/environment"
-	"pmaas.io/spi/tracking"
+	"github.com/avanha/pmaas-plugin-environment/data"
+	"github.com/avanha/pmaas-plugin-environment/internal/wrapper"
+	spienvironment "github.com/avanha/pmaas-spi/environment"
+	"github.com/avanha/pmaas-spi/tracking"
 )
 
 func CreateThermometer(trackingConfig tracking.Config) *Thermometer {
