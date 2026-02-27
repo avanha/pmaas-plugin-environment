@@ -95,8 +95,10 @@ func (p *plugin) Start() {
 	// Without it, we depend on the plugin ordering to ensure we get any devices in existence prior to our registration.
 }
 
-func (p *plugin) Stop() {
+func (p *plugin) Stop() chan func() {
 	fmt.Printf("%T Stopping...\n", *p)
+
+	return p.state.container.ClosedCallbackChannel()
 }
 
 func (p *plugin) registerEventHandlers() {
