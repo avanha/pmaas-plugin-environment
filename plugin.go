@@ -27,6 +27,7 @@ import (
 var contentFS embed.FS
 
 var IWirelessThermometerType = reflect.TypeOf((*environmental.IWirelessThermometer)(nil)).Elem()
+var IThermostatType = reflect.TypeOf((*environmental.IThermostat)(nil)).Elem()
 
 var WirelessThermometerTemplate = spi.TemplateInfo{
 	Name: "environment_wireless_thermometer",
@@ -36,6 +37,16 @@ var WirelessThermometerTemplate = spi.TemplateInfo{
 	},
 	Paths:  []string{"templates/wireless_thermometer.htmlt"},
 	Styles: []string{"css/wireless_thermometer.css"},
+}
+
+var ThermostatTemplate = spi.TemplateInfo{
+	Name: "environment_thermostat",
+	FuncMap: template.FuncMap{
+		"CelsiusToFahrenheit": CelsiusToFahrenheit,
+		"RelativeTime":        RelativeTime,
+	},
+	Paths:  []string{"templates/thermostat.htmlt"},
+	Styles: []string{"css/thermostat.css"},
 }
 
 type state struct {
@@ -89,6 +100,8 @@ func (p *plugin) Start() {
 	fmt.Printf("%T Starting...\n", *p)
 	p.state.container.RegisterEntityRenderer(
 		reflect.TypeOf((*thermometer.WirelessThermometer)(nil)).Elem(), p.wirelessThermometerRendererFactory)
+	p.state.container.RegisterEntityRenderer(
+		reflect.TypeOf((*thermometer.Thermostat)(nil)).Elem(), p.thermostatRendererFactory)
 
 	p.registerEventHandlers()
 	// TODO: Retrieve the list of possible entities to add to our map.
@@ -178,6 +191,8 @@ func (p *plugin) handleHttpListRequest(w http.ResponseWriter, r *http.Request) {
 			// This is the type-specific way to get a pointer to a struct.  It should be faster
 			// than the reflection-based approach below.
 			itemRefs[i] = &typedItem
+		case thermometer.Thermostat:
+			itemRefs[i] = &typedItem
 		default:
 			itemType := reflect.TypeOf(typedItem)
 			itemTypeKind := itemType.Kind()
@@ -240,22 +255,40 @@ func (p *plugin) onEntityRegistered(eventInfo *events.EventInfo) error {
 		return errors.New(fmt.Sprintf("Entity %s already tracked", event.Id))
 	}
 
-	var trackingConfig tracking.Config
-
-	if event.Name == "" {
-		// Do not track unnamed thermometers
-		trackingConfig = tracking.Config{}
+	if event.EntityType.AssignableTo(IThermostatType) {
+		p.registerThermostat(event)
 	} else {
-		trackingConfig = tracking.Config{
-			TrackingMode:        tracking.ModePoll,
-			PollIntervalSeconds: 300,
-			Name:                buildTrackingName("WirelessThermometer", event.Name),
-			Schema: tracking.Schema{
-				DataStructType:     data.WirelessThermometerDataType,
-				InsertArgFactoryFn: data.WirelessThermometerDataToInsertArgs,
-			},
-		}
+		p.registerWirelessThermometer(event)
 	}
+
+	return nil
+}
+
+// buildTrackingConfig builds the tracking.Config shared by every re-hosted entity kind: unnamed
+// devices aren't tracked at all, everything else polls its own stub every 5 minutes under a name
+// prefixed by the entity kind.
+func buildTrackingConfig(
+	kindPrefix string, name string, dataType reflect.Type, insertArgFn tracking.InsertArgFactoryFunc,
+) tracking.Config {
+	if name == "" {
+		// Do not track unnamed devices
+		return tracking.Config{}
+	}
+
+	return tracking.Config{
+		TrackingMode:        tracking.ModePoll,
+		PollIntervalSeconds: 300,
+		Name:                buildTrackingName(kindPrefix, name),
+		Schema: tracking.Schema{
+			DataStructType:     dataType,
+			InsertArgFactoryFn: insertArgFn,
+		},
+	}
+}
+
+func (p *plugin) registerWirelessThermometer(event events.EntityRegisteredEvent) {
+	trackingConfig := buildTrackingConfig(
+		"WirelessThermometer", event.Name, data.WirelessThermometerDataType, data.WirelessThermometerDataToInsertArgs)
 
 	instance := thermometer.CreateWirelessThermometer(
 		p.state.nextEntityId(), event.Id, event.Name, entities.WirelessThermometerType, trackingConfig)
@@ -278,8 +311,30 @@ func (p *plugin) onEntityRegistered(eventInfo *events.EventInfo) error {
 	} else {
 		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
 	}
+}
 
-	return nil
+func (p *plugin) registerThermostat(event events.EntityRegisteredEvent) {
+	trackingConfig := buildTrackingConfig(
+		"Thermostat", event.Name, data.ThermostatDataType, data.ThermostatDataToInsertArgs)
+
+	instance := thermometer.CreateThermostat(
+		p.state.nextEntityId(), event.Id, event.Name, entities.ThermostatType, trackingConfig)
+
+	var stubFactoryFn spi.EntityStubFactoryFunc = func() (any, error) {
+		return instance.GetStub(p.state.container), nil
+	}
+	p.state.entities[event.Id] = instance
+	pmaasEntityId, err := p.state.container.RegisterEntity(
+		instance.Id,
+		entities.ThermostatType,
+		instance.Name,
+		stubFactoryFn)
+
+	if err == nil {
+		instance.PmaasEntityId = pmaasEntityId
+	} else {
+		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
+	}
 }
 
 func buildTrackingName(prefix string, name string) string {
@@ -336,8 +391,36 @@ func (p *plugin) wirelessThermometerRendererFactory() (spi.EntityRenderer, error
 	return spi.EntityRenderer{StreamingRenderFunc: renderer, Styles: t.Styles, Scripts: t.Scripts}, nil
 }
 
+func (p *plugin) thermostatRendererFactory() (spi.EntityRenderer, error) {
+	// Load the template
+	compiledTemplate, err := p.state.container.GetTemplate(&ThermostatTemplate)
+
+	if err != nil {
+		return spi.EntityRenderer{}, fmt.Errorf("unable to load thermostat template: %v", err)
+	}
+
+	// Declare a function that casts the entity to the expected type and evaluates it via the template loaded above
+	renderer := func(w io.Writer, entity any) error {
+		thermostatEntity, ok := entity.(*thermometer.Thermostat)
+
+		if !ok {
+			return errors.New("item is not an instance of *Thermostat")
+		}
+
+		err := compiledTemplate.Instance.Execute(w, thermostatEntity)
+
+		if err != nil {
+			return fmt.Errorf("unable to execute thermostat template: %w", err)
+		}
+
+		return nil
+	}
+
+	return spi.EntityRenderer{StreamingRenderFunc: renderer, Styles: compiledTemplate.Styles, Scripts: compiledTemplate.Scripts}, nil
+}
+
 func isCompatibleEntityType(entityType reflect.Type) bool {
-	result := entityType.AssignableTo(IWirelessThermometerType)
+	result := entityType.AssignableTo(IWirelessThermometerType) || entityType.AssignableTo(IThermostatType)
 	//fmt.Printf("Checking entityType %v, result: %v\n", entityType, result)
 	return result
 }

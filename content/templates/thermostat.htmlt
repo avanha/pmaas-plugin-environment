@@ -1,0 +1,56 @@
+<div class="entity-environment-thermostat">
+    <div class="title-row">
+        <div class="name">{{.Name}}</div>
+        <div class="mode-icons">
+            {{if eq .HvacStatus "HEATING"}}
+                <i class="bi bi-fire heating" title="Heating"></i>
+            {{else if eq .HvacStatus "COOLING"}}
+                <i class="bi bi-snow cooling" title="Cooling"></i>
+            {{end}}
+            {{if eq .EcoMode "MANUAL_ECO"}}
+                <i class="bi bi-recycle eco" title="Eco mode"></i>
+            {{end}}
+        </div>
+    </div>
+    {{if .SensorData.IsEmpty}}
+        <div>Waiting for data</div>
+    {{else}}
+        <div class="sensor-data">
+            <div class="temp-celsius">{{printf "%.2f" .SensorData.Temperature}} C</div>
+            <div class="temp-fahrenheit">{{CelsiusToFahrenheit .SensorData.Temperature | printf "%.2f"}} F</div>
+            {{if .SensorData.HasHumidity}}
+                <div class="humidity">
+                    <span class="label"><i class="bi bi-droplet-fill"></i></span>
+                    <span class="value">{{.SensorData.Humidity}}%</span>
+                </div>
+            {{end}}
+            {{if eq .HvacStatus "HEATING"}}
+                <div class="setpoint heat">
+                    <span class="label"><i class="bi bi-fire"></i></span>
+                    <span class="value">{{printf "%.1f" .HeatSetpoint}} C</span>
+                </div>
+            {{else if eq .HvacStatus "COOLING"}}
+                <div class="setpoint cool">
+                    <span class="label"><i class="bi bi-snow"></i></span>
+                    <span class="value">{{printf "%.1f" .CoolSetpoint}} C</span>
+                </div>
+            {{end}}
+            <div class="timestamp">
+                <span class="label"><i class="bi bi-stopwatch"></i></span>
+                <span class="value">{{RelativeTime .SensorData.LastUpdateTime}}</span>
+            </div>
+        </div>
+        <div class="extremes">
+            <div class="temp high">
+                <div class="temp-data celsius">{{printf "%.2f" .HighTemperature}} C</div>
+                <div class="temp-data fahrenheit">{{CelsiusToFahrenheit .HighTemperature | printf "%.2f"}} F</div>
+                <div class="timestamp">{{.HighTemperatureTime.Format "3:04 PM"}}</div>
+            </div>
+            <div class="temp low">
+                <div class="temp-data celsius">{{printf "%.2f" .LowTemperature}} C</div>
+                <div class="temp-data fahrenheit">{{CelsiusToFahrenheit .LowTemperature | printf "%.2f"}} F</div>
+                <div class="timestamp">{{.LowTemperatureTime.Format "3:04 PM"}}</div>
+            </div>
+        </div>
+    {{end}}
+</div>

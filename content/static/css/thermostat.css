@@ -1,0 +1,100 @@
+.entity-environment-thermostat {
+
+}
+
+.entity-environment-thermostat .title-row {
+    display: flex;
+    flex-flow: row nowrap;
+}
+
+.entity-environment-thermostat .title-row .name {
+    flex: 1;
+    font-size: 15pt;
+}
+
+.entity-environment-thermostat .title-row .mode-icons {
+    display: flex;
+    flex-flow: row nowrap;
+    align-items: center;
+    font-size: 14pt;
+}
+
+.entity-environment-thermostat .title-row .mode-icons i:not(:first-child) {
+    margin-left: 8px;
+}
+
+.entity-environment-thermostat .title-row .mode-icons .heating {
+    color: #d9534f;
+}
+
+.entity-environment-thermostat .title-row .mode-icons .cooling {
+    color: #337ab7;
+}
+
+.entity-environment-thermostat .title-row .mode-icons .eco {
+    color: #5cb85c;
+}
+
+.entity-environment-thermostat .sensor-data {
+    display: flex;
+    flex-flow: row nowrap;
+    color: #6fb5c7;
+    align-items: baseline;
+    font-size: 15pt;
+}
+
+.entity-environment-thermostat .sensor-data div:not(:first-child) {
+    margin-left: 20px;
+}
+
+.entity-environment-thermostat .sensor-data .temp-celsius {
+    font-size: 20pt;
+}
+
+.entity-environment-thermostat .sensor-data .temp-fahrenheit {
+    margin-left: 10px !important;
+}
+
+.entity-environment-thermostat .sensor-data .setpoint.heat {
+    color: #d9534f;
+}
+
+.entity-environment-thermostat .sensor-data .setpoint.cool {
+    color: #337ab7;
+}
+
+.entity-environment-thermostat .sensor-data .timestamp {
+    flex: 5 1 auto;
+    text-align: right;
+    font-size: 11pt;
+    color: grey;
+}
+
+.entity-environment-thermostat .extremes {
+    display: flex;
+    flex-flow: column;
+}
+
+.entity-environment-thermostat .extremes .temp div:not(:first-child) {
+    margin-left: 10px;
+}
+
+.entity-environment-thermostat .extremes .temp {
+    display: flex;
+    flex-flow: row nowrap;
+}
+
+.entity-environment-thermostat .extremes .temp.high {
+    color: darkred;
+}
+
+.entity-environment-thermostat .extremes .temp.low {
+    color: darkblue;
+}
+
+.entity-environment-thermostat .extremes .timestamp {
+    color: grey;
+    flex: 5 1 auto;
+    text-align: right;
+    font-size: 11pt;
+}
