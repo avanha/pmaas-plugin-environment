@@ -2,10 +2,11 @@
     <div class="title-row">
         <div class="name">{{.Name}}</div>
         <div class="mode-icons">
-            {{if eq .HvacStatus "HEATING"}}
-                <i class="bi bi-fire heating" title="Heating"></i>
-            {{else if eq .HvacStatus "COOLING"}}
-                <i class="bi bi-snow cooling" title="Cooling"></i>
+            {{if or (eq .Mode "HEAT") (eq .Mode "HEATCOOL")}}
+                <i class="bi bi-fire heat-icon{{if eq .HvacStatus "HEATING"}} active{{end}}" title="Heat"></i>
+            {{end}}
+            {{if or (eq .Mode "COOL") (eq .Mode "HEATCOOL")}}
+                <i class="bi bi-snow cool-icon{{if eq .HvacStatus "COOLING"}} active{{end}}" title="Cool"></i>
             {{end}}
             {{if eq .EcoMode "MANUAL_ECO"}}
                 <i class="bi bi-recycle eco" title="Eco mode"></i>
@@ -24,12 +25,13 @@
                     <span class="value">{{.SensorData.Humidity}}%</span>
                 </div>
             {{end}}
-            {{if eq .HvacStatus "HEATING"}}
+            {{if or (eq .Mode "HEAT") (eq .Mode "HEATCOOL")}}
                 <div class="setpoint heat">
                     <span class="label"><i class="bi bi-fire"></i></span>
                     <span class="value">{{printf "%.1f" .HeatSetpoint}} C</span>
                 </div>
-            {{else if eq .HvacStatus "COOLING"}}
+            {{end}}
+            {{if or (eq .Mode "COOL") (eq .Mode "HEATCOOL")}}
                 <div class="setpoint cool">
                     <span class="label"><i class="bi bi-snow"></i></span>
                     <span class="value">{{printf "%.1f" .CoolSetpoint}} C</span>

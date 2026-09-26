@@ -23,12 +23,28 @@
     margin-left: 8px;
 }
 
-.entity-environment-thermostat .title-row .mode-icons .heating {
-    color: #d9534f;
+/* Shown whenever the corresponding mode is configured (HEAT/COOL/HEATCOOL) — dim until .active, which
+   mirrors the physical thermostat's own screen changing to an orange/blue background while it's
+   actually running that action right now (HvacStatus), not just configured for it (Mode). */
+.entity-environment-thermostat .title-row .mode-icons .heat-icon,
+.entity-environment-thermostat .title-row .mode-icons .cool-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    color: grey;
 }
 
-.entity-environment-thermostat .title-row .mode-icons .cooling {
-    color: #337ab7;
+.entity-environment-thermostat .title-row .mode-icons .heat-icon.active {
+    background-color: #e67e22;
+    color: white;
+}
+
+.entity-environment-thermostat .title-row .mode-icons .cool-icon.active {
+    background-color: #337ab7;
+    color: white;
 }
 
 .entity-environment-thermostat .title-row .mode-icons .eco {

@@ -40,7 +40,10 @@ func CreateThermostat(
 // battery-powered wireless sensor — just the HVAC-specific attributes on top of the shared Thermometer.
 type Thermostat struct {
 	Thermometer
-	HvacStatus   string
+	HvacStatus string
+	// Mode is the configured mode (HEAT/COOL/HEATCOOL/OFF), independent of HvacStatus (what it's
+	// actually doing right now). A HEATCOOL-mode thermostat has both setpoints meaningful at once.
+	Mode         string
 	EcoMode      string
 	HeatSetpoint float32
 	CoolSetpoint float32
@@ -72,6 +75,7 @@ func (t *Thermostat) Data() tracking.DataSample {
 			HasHumidity:    t.SensorData.HasHumidity,
 			Humidity:       t.SensorData.Humidity,
 			HvacStatus:     t.HvacStatus,
+			Mode:           t.Mode,
 			EcoMode:        t.EcoMode,
 			HeatSetpoint:   t.HeatSetpoint,
 			CoolSetpoint:   t.CoolSetpoint,
@@ -116,11 +120,13 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 	temperatureUpdated := false
 	humidityUpdated := false
 	hvacStatusUpdated := false
+	modeUpdated := false
 	ecoModeUpdated := false
 	currentName := t.Name
 	currentTemperature := t.SensorData.Temperature
 	currentHumidity := t.SensorData.Humidity
 	currentHvacStatus := t.HvacStatus
+	currentMode := t.Mode
 	currentEcoMode := t.EcoMode
 	now := time.Now()
 
@@ -132,6 +138,11 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 	if currentHvacStatus != newThermostatState.HvacStatus {
 		t.HvacStatus = newThermostatState.HvacStatus
 		hvacStatusUpdated = true
+	}
+
+	if currentMode != newThermostatState.Mode {
+		t.Mode = newThermostatState.Mode
+		modeUpdated = true
 	}
 
 	if currentEcoMode != newThermostatState.EcoMode {
@@ -201,6 +212,10 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 		// TODO: Publish HvacStatusChangedEvent
 	}
 
+	if modeUpdated {
+		// TODO: Publish ModeChangedEvent
+	}
+
 	if ecoModeUpdated {
 		// TODO: Publish EcoModeChangedEvent
 	}
@@ -223,7 +238,7 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 		publishEventFunc(t.PmaasEntityId, event)
 	}
 
-	if !nameUpdated && !temperatureUpdated && !humidityUpdated && !hvacStatusUpdated && !ecoModeUpdated {
+	if !nameUpdated && !temperatureUpdated && !humidityUpdated && !hvacStatusUpdated && !modeUpdated && !ecoModeUpdated {
 		fmt.Printf("State change for %s, but no significant state change detected\n", t.Id)
 	}
 

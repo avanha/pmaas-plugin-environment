@@ -6,10 +6,13 @@ import (
 )
 
 type ThermostatData struct {
-	Temperature    float32 `track:"always"`
-	HasHumidity    bool
-	Humidity       float32   `track:"always,nullable"`
-	HvacStatus     string    `track:"always"`
+	Temperature float32 `track:"always"`
+	HasHumidity bool
+	Humidity    float32 `track:"always,nullable"`
+	// HvacStatus is what the system is actually doing right now: "OFF", "HEATING", "COOLING".
+	HvacStatus string `track:"always"`
+	// Mode is the configured mode, independent of HvacStatus: "HEAT", "COOL", "HEATCOOL", "OFF".
+	Mode           string    `track:"always"`
 	EcoMode        string    `track:"always"`
 	HeatSetpoint   float32   `track:"onchange,nullable"`
 	CoolSetpoint   float32   `track:"onchange,nullable"`
@@ -28,14 +31,16 @@ func ThermostatDataToInsertArgs(anyData *any) ([]any, error) {
 		humidity = sd.Humidity
 	}
 
-	// Only the setpoint matching the currently active HVAC action is meaningful — a HEATCOOL-mode
-	// thermostat sitting idle could report both, but neither is actually "in effect" right now.
-	switch sd.HvacStatus {
-	case "HEATING":
+	// A setpoint is meaningful whenever its mode is enabled, regardless of whether the system is
+	// actively running right now (HvacStatus) — a HEATCOOL-mode thermostat has both setpoints in effect
+	// simultaneously even while idle.
+	if sd.Mode == "HEAT" || sd.Mode == "HEATCOOL" {
 		heatSetpoint = sd.HeatSetpoint
-	case "COOLING":
+	}
+
+	if sd.Mode == "COOL" || sd.Mode == "HEATCOOL" {
 		coolSetpoint = sd.CoolSetpoint
 	}
 
-	return []any{sd.Temperature, humidity, sd.HvacStatus, sd.EcoMode, heatSetpoint, coolSetpoint, sd.LastUpdateTime}, nil
+	return []any{sd.Temperature, humidity, sd.HvacStatus, sd.Mode, sd.EcoMode, heatSetpoint, coolSetpoint, sd.LastUpdateTime}, nil
 }
