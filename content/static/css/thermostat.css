@@ -51,6 +51,10 @@
     color: #5cb85c;
 }
 
+.entity-environment-thermostat .title-row .mode-icons .offline-icon {
+    color: #d9534f;
+}
+
 .entity-environment-thermostat .sensor-data {
     display: flex;
     flex-flow: row nowrap;

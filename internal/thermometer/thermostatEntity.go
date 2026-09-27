@@ -47,6 +47,12 @@ type Thermostat struct {
 	EcoMode      string
 	HeatSetpoint float32
 	CoolSetpoint float32
+	// Connectivity is "ONLINE" or "OFFLINE". OfflineSince is when it last transitioned to "OFFLINE" —
+	// computed by the producer plugin (which knows when the transition actually happened, not just
+	// when we last heard about it) and just relayed here as-is, the same way HeatSetpoint/CoolSetpoint
+	// are kept current without this plugin re-deriving them.
+	Connectivity string
+	OfflineSince time.Time
 	stub         *thermostatStub
 }
 
@@ -79,6 +85,7 @@ func (t *Thermostat) Data() tracking.DataSample {
 			EcoMode:        t.EcoMode,
 			HeatSetpoint:   t.HeatSetpoint,
 			CoolSetpoint:   t.CoolSetpoint,
+			Connectivity:   t.Connectivity,
 			LastUpdateTime: t.SensorData.LastUpdateTime,
 		},
 	}
@@ -122,12 +129,14 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 	hvacStatusUpdated := false
 	modeUpdated := false
 	ecoModeUpdated := false
+	connectivityUpdated := false
 	currentName := t.Name
 	currentTemperature := t.SensorData.Temperature
 	currentHumidity := t.SensorData.Humidity
 	currentHvacStatus := t.HvacStatus
 	currentMode := t.Mode
 	currentEcoMode := t.EcoMode
+	currentConnectivity := t.Connectivity
 	now := time.Now()
 
 	if currentName != newThermostatState.Name {
@@ -149,6 +158,16 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 		t.EcoMode = newThermostatState.EcoMode
 		ecoModeUpdated = true
 	}
+
+	if currentConnectivity != newThermostatState.Connectivity {
+		t.Connectivity = newThermostatState.Connectivity
+		connectivityUpdated = true
+	}
+
+	// OfflineSince is a timestamp accompanying Connectivity, not independent state of its own — no
+	// separate change event for it. The producer (which knows exactly when the transition happened,
+	// not just when we last heard about it) already computed the correct value; just relay it.
+	t.OfflineSince = newThermostatState.OfflineSince
 
 	// Setpoints aren't tracked for high/low extremes the way temperature/humidity are, and don't
 	// currently have their own change event — just kept current.
@@ -220,6 +239,10 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 		// TODO: Publish EcoModeChangedEvent
 	}
 
+	if connectivityUpdated {
+		// TODO: Publish ConnectivityChangedEvent
+	}
+
 	if temperatureUpdated {
 		event := spienvironment.TemperatureChangeEvent{
 			EntityEvent: *getEntityEvent(),
@@ -238,7 +261,8 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 		publishEventFunc(t.PmaasEntityId, event)
 	}
 
-	if !nameUpdated && !temperatureUpdated && !humidityUpdated && !hvacStatusUpdated && !modeUpdated && !ecoModeUpdated {
+	if !nameUpdated && !temperatureUpdated && !humidityUpdated && !hvacStatusUpdated && !modeUpdated &&
+		!ecoModeUpdated && !connectivityUpdated {
 		fmt.Printf("State change for %s, but no significant state change detected\n", t.Id)
 	}
 

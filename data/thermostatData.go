@@ -16,6 +16,7 @@ type ThermostatData struct {
 	EcoMode        string    `track:"always"`
 	HeatSetpoint   float32   `track:"onchange,nullable"`
 	CoolSetpoint   float32   `track:"onchange,nullable"`
+	Connectivity   string    `track:"always"`
 	LastUpdateTime time.Time `track:"always"`
 }
 
@@ -42,5 +43,8 @@ func ThermostatDataToInsertArgs(anyData *any) ([]any, error) {
 		coolSetpoint = sd.CoolSetpoint
 	}
 
-	return []any{sd.Temperature, humidity, sd.HvacStatus, sd.Mode, sd.EcoMode, heatSetpoint, coolSetpoint, sd.LastUpdateTime}, nil
+	return []any{
+		sd.Temperature, humidity, sd.HvacStatus, sd.Mode, sd.EcoMode, heatSetpoint, coolSetpoint,
+		sd.Connectivity, sd.LastUpdateTime,
+	}, nil
 }
