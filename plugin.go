@@ -42,9 +42,11 @@ var WirelessThermometerTemplate = spi.TemplateInfo{
 var ThermostatTemplate = spi.TemplateInfo{
 	Name: "environment_thermostat",
 	FuncMap: template.FuncMap{
-		"CelsiusToFahrenheit": CelsiusToFahrenheit,
-		"RelativeTime":        RelativeTime,
-		"IsOffline":           IsOffline,
+		"CelsiusToFahrenheit":    CelsiusToFahrenheit,
+		"RelativeTime":           RelativeTime,
+		"IsOffline":              IsOffline,
+		"IsOnline":               IsOnline,
+		"FormatConnectivityTime": FormatConnectivityTime,
 	},
 	Paths:  []string{"templates/thermostat.htmlt"},
 	Styles: []string{"css/thermostat.css"},
@@ -432,6 +434,21 @@ func CelsiusToFahrenheit(celsiusValue float32) float32 {
 
 func IsOffline(connectivity environmental.Connectivity) bool {
 	return connectivity == environmental.ConnectivityOffline
+}
+
+func IsOnline(connectivity environmental.Connectivity) bool {
+	return connectivity == environmental.ConnectivityOnline
+}
+
+// FormatConnectivityTime formats an OfflineSince/OnlineSince timestamp for display, distinguishing a
+// state that's genuinely never been observed (zero time.Time) from a real timestamp — text/template has
+// no way to test IsZero on its own.
+func FormatConnectivityTime(timeValue time.Time) string {
+	if timeValue.IsZero() {
+		return "Unknown"
+	}
+
+	return timeValue.Format("2006-01-02 3:04:05 PM")
 }
 
 func RelativeTime(timeValue time.Time) string {

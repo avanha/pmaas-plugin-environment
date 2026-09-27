@@ -23,9 +23,11 @@
     margin-left: 8px;
 }
 
-/* Shown whenever the corresponding mode is configured (HEAT/COOL/HEATCOOL) — dim until .active, which
-   mirrors the physical thermostat's own screen changing to an orange/blue background while it's
-   actually running that action right now (HvacStatus), not just configured for it (Mode). */
+/* Grey (off) means Mode doesn't include this function at all. Colored (.configured, same red/blue as the
+   setpoint values below) means Mode includes it but it isn't running right now. The background highlight
+   (.active) means it's actually running right now (HvacStatus), independent of .configured — mirroring
+   the physical thermostat's own screen changing to an orange/blue background while it's actually running
+   that action right now. */
 .entity-environment-thermostat .title-row .mode-icons .heat-icon,
 .entity-environment-thermostat .title-row .mode-icons .cool-icon {
     display: inline-flex;
@@ -35,6 +37,14 @@
     height: 22px;
     border-radius: 4px;
     color: grey;
+}
+
+.entity-environment-thermostat .title-row .mode-icons .heat-icon.configured {
+    color: #d9534f;
+}
+
+.entity-environment-thermostat .title-row .mode-icons .cool-icon.configured {
+    color: #337ab7;
 }
 
 .entity-environment-thermostat .title-row .mode-icons .heat-icon.active {
@@ -51,8 +61,12 @@
     color: #5cb85c;
 }
 
-.entity-environment-thermostat .title-row .mode-icons .offline-icon {
+.entity-environment-thermostat .title-row .mode-icons .connectivity-icon.offline {
     color: #d9534f;
+}
+
+.entity-environment-thermostat .title-row .mode-icons .connectivity-icon.online {
+    color: #5cb85c;
 }
 
 .entity-environment-thermostat .sensor-data {
@@ -75,12 +89,16 @@
     margin-left: 10px !important;
 }
 
-.entity-environment-thermostat .sensor-data .setpoint.heat {
+.entity-environment-thermostat .sensor-data .setpoint .heat {
     color: #d9534f;
 }
 
-.entity-environment-thermostat .sensor-data .setpoint.cool {
+.entity-environment-thermostat .sensor-data .setpoint .cool {
     color: #337ab7;
+}
+
+.entity-environment-thermostat .sensor-data .setpoint .separator {
+    color: grey;
 }
 
 .entity-environment-thermostat .sensor-data .timestamp {
@@ -104,12 +122,14 @@
     flex-flow: row nowrap;
 }
 
+/* Same red/blue used for the heat/cool setpoint values and mode icons, so hot-vs-cold reads consistently
+   across the whole card. */
 .entity-environment-thermostat .extremes .temp.high {
-    color: darkred;
+    color: #d9534f;
 }
 
 .entity-environment-thermostat .extremes .temp.low {
-    color: darkblue;
+    color: #337ab7;
 }
 
 .entity-environment-thermostat .extremes .timestamp {

@@ -3,15 +3,16 @@
         <div class="name">{{.Name}}</div>
         <div class="mode-icons">
             {{if IsOffline .Connectivity}}
-                <i class="bi bi-wifi-off offline-icon"
-                   title="Offline since {{.OfflineSince.Format "2006-01-02 3:04:05 PM"}}"></i>
+                <i class="bi bi-wifi-off connectivity-icon offline"
+                   title="Offline since {{FormatConnectivityTime .OfflineSince}}&#10;Last online: {{FormatConnectivityTime .OnlineSince}}"></i>
+            {{else if IsOnline .Connectivity}}
+                <i class="bi bi-wifi connectivity-icon online"
+                   title="Online since {{FormatConnectivityTime .OnlineSince}}&#10;Last offline: {{FormatConnectivityTime .OfflineSince}}"></i>
             {{end}}
-            {{if or (eq .Mode "HEAT") (eq .Mode "HEATCOOL")}}
-                <i class="bi bi-fire heat-icon{{if eq .HvacStatus "HEATING"}} active{{end}}" title="Heat"></i>
-            {{end}}
-            {{if or (eq .Mode "COOL") (eq .Mode "HEATCOOL")}}
-                <i class="bi bi-snow cool-icon{{if eq .HvacStatus "COOLING"}} active{{end}}" title="Cool"></i>
-            {{end}}
+            <i class="bi bi-fire heat-icon{{if or (eq .Mode "HEAT") (eq .Mode "HEATCOOL")}} configured{{end}}{{if eq .HvacStatus "HEATING"}} active{{end}}"
+               title="Heat"></i>
+            <i class="bi bi-snow cool-icon{{if or (eq .Mode "COOL") (eq .Mode "HEATCOOL")}} configured{{end}}{{if eq .HvacStatus "COOLING"}} active{{end}}"
+               title="Cool"></i>
             {{if eq .EcoMode "MANUAL_ECO"}}
                 <i class="bi bi-recycle eco" title="Eco mode"></i>
             {{end}}
@@ -29,16 +30,17 @@
                     <span class="value">{{.SensorData.Humidity}}%</span>
                 </div>
             {{end}}
-            {{if or (eq .Mode "HEAT") (eq .Mode "HEATCOOL")}}
-                <div class="setpoint heat">
-                    <span class="label"><i class="bi bi-fire"></i></span>
-                    <span class="value">{{printf "%.1f" .HeatSetpoint}} C</span>
+            {{if eq .Mode "HEATCOOL"}}
+                <div class="setpoint">
+                    <span class="value heat">{{printf "%.1f" .HeatSetpoint}}</span><span class="separator"> - </span><span class="value cool">{{printf "%.1f" .CoolSetpoint}}</span> C
                 </div>
-            {{end}}
-            {{if or (eq .Mode "COOL") (eq .Mode "HEATCOOL")}}
-                <div class="setpoint cool">
-                    <span class="label"><i class="bi bi-snow"></i></span>
-                    <span class="value">{{printf "%.1f" .CoolSetpoint}} C</span>
+            {{else if eq .Mode "HEAT"}}
+                <div class="setpoint">
+                    <span class="value heat">{{printf "%.1f" .HeatSetpoint}} C</span>
+                </div>
+            {{else if eq .Mode "COOL"}}
+                <div class="setpoint">
+                    <span class="value cool">{{printf "%.1f" .CoolSetpoint}} C</span>
                 </div>
             {{end}}
             <div class="timestamp">

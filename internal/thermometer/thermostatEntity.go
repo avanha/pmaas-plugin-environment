@@ -47,12 +47,14 @@ type Thermostat struct {
 	EcoMode      string
 	HeatSetpoint float32
 	CoolSetpoint float32
-	// OfflineSince is when Connectivity last transitioned to spienvironment.ConnectivityOffline —
-	// computed by the producer plugin (which knows when the transition actually happened, not just
-	// when we last heard about it) and just relayed here as-is, the same way HeatSetpoint/CoolSetpoint
-	// are kept current without this plugin re-deriving them.
+	// OfflineSince and OnlineSince are when Connectivity last transitioned to
+	// spienvironment.ConnectivityOffline/ConnectivityOnline respectively — computed by the producer
+	// plugin (which knows when the transition actually happened, not just when we last heard about it)
+	// and just relayed here as-is, the same way HeatSetpoint/CoolSetpoint are kept current without this
+	// plugin re-deriving them.
 	Connectivity spienvironment.Connectivity
 	OfflineSince time.Time
+	OnlineSince  time.Time
 	stub         *thermostatStub
 }
 
@@ -164,10 +166,12 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 		connectivityUpdated = true
 	}
 
-	// OfflineSince is a timestamp accompanying Connectivity, not independent state of its own — no
-	// separate change event for it. The producer (which knows exactly when the transition happened,
-	// not just when we last heard about it) already computed the correct value; just relay it.
+	// OfflineSince/OnlineSince are timestamps accompanying Connectivity, not independent state of their
+	// own — no separate change event for them. The producer (which knows exactly when each transition
+	// happened, not just when we last heard about it) already computed the correct values; just relay
+	// them.
 	t.OfflineSince = newThermostatState.OfflineSince
+	t.OnlineSince = newThermostatState.OnlineSince
 
 	// Setpoints aren't tracked for high/low extremes the way temperature/humidity are, and don't
 	// currently have their own change event — just kept current.
