@@ -46,11 +46,11 @@
 }
 
 .entity-environment-thermostat .title-row .mode-icons .heat-icon.configured {
-    color: #d9534f;
+    color: darkred;
 }
 
 .entity-environment-thermostat .title-row .mode-icons .cool-icon.configured {
-    color: #337ab7;
+    color: darkblue;
 }
 
 .entity-environment-thermostat .title-row .mode-icons .heat-icon.active {
@@ -59,7 +59,7 @@
 }
 
 .entity-environment-thermostat .title-row .mode-icons .cool-icon.active {
-    background-color: #337ab7;
+    background-color: darkblue;
     color: white;
 }
 
@@ -96,11 +96,11 @@
 }
 
 .entity-environment-thermostat .sensor-data .setpoint .heat {
-    color: #d9534f;
+    color: darkred;
 }
 
 .entity-environment-thermostat .sensor-data .setpoint .cool {
-    color: #337ab7;
+    color: darkblue;
 }
 
 .entity-environment-thermostat .sensor-data .setpoint .separator {
@@ -128,14 +128,15 @@
     flex-flow: row nowrap;
 }
 
-/* Same red/blue used for the heat/cool setpoint values and mode icons, so hot-vs-cold reads consistently
-   across the whole card. */
+/* Same red/blue used for the heat/cool setpoint values and mode icons, and matching
+   wireless_thermometer.css's own high/low colors, so hot-vs-cold reads consistently whether a card is a
+   Thermostat or a WirelessThermometer — the two show up side by side on this plugin's list page. */
 .entity-environment-thermostat .extremes .temp.high {
-    color: #d9534f;
+    color: darkred;
 }
 
 .entity-environment-thermostat .extremes .temp.low {
-    color: #337ab7;
+    color: darkblue;
 }
 
 .entity-environment-thermostat .extremes .timestamp {
