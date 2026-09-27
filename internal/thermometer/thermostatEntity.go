@@ -47,11 +47,11 @@ type Thermostat struct {
 	EcoMode      string
 	HeatSetpoint float32
 	CoolSetpoint float32
-	// Connectivity is "ONLINE" or "OFFLINE". OfflineSince is when it last transitioned to "OFFLINE" —
+	// OfflineSince is when Connectivity last transitioned to spienvironment.ConnectivityOffline —
 	// computed by the producer plugin (which knows when the transition actually happened, not just
 	// when we last heard about it) and just relayed here as-is, the same way HeatSetpoint/CoolSetpoint
 	// are kept current without this plugin re-deriving them.
-	Connectivity string
+	Connectivity spienvironment.Connectivity
 	OfflineSince time.Time
 	stub         *thermostatStub
 }

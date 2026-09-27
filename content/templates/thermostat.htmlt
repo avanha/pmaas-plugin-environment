@@ -2,7 +2,7 @@
     <div class="title-row">
         <div class="name">{{.Name}}</div>
         <div class="mode-icons">
-            {{if eq .Connectivity "OFFLINE"}}
+            {{if IsOffline .Connectivity}}
                 <i class="bi bi-wifi-off offline-icon"
                    title="Offline since {{.OfflineSince.Format "2006-01-02 3:04:05 PM"}}"></i>
             {{end}}

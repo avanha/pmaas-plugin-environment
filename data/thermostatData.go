@@ -3,6 +3,8 @@ package data
 import (
 	"reflect"
 	"time"
+
+	"github.com/avanha/pmaas-spi/environment"
 )
 
 type ThermostatData struct {
@@ -12,12 +14,12 @@ type ThermostatData struct {
 	// HvacStatus is what the system is actually doing right now: "OFF", "HEATING", "COOLING".
 	HvacStatus string `track:"always"`
 	// Mode is the configured mode, independent of HvacStatus: "HEAT", "COOL", "HEATCOOL", "OFF".
-	Mode           string    `track:"always"`
-	EcoMode        string    `track:"always"`
-	HeatSetpoint   float32   `track:"onchange,nullable"`
-	CoolSetpoint   float32   `track:"onchange,nullable"`
-	Connectivity   string    `track:"always"`
-	LastUpdateTime time.Time `track:"always"`
+	Mode           string                   `track:"always"`
+	EcoMode        string                   `track:"always"`
+	HeatSetpoint   float32                  `track:"onchange,nullable"`
+	CoolSetpoint   float32                  `track:"onchange,nullable"`
+	Connectivity   environment.Connectivity `track:"always"`
+	LastUpdateTime time.Time                `track:"always"`
 }
 
 var ThermostatDataType = reflect.TypeOf((*ThermostatData)(nil)).Elem()
@@ -45,6 +47,6 @@ func ThermostatDataToInsertArgs(anyData *any) ([]any, error) {
 
 	return []any{
 		sd.Temperature, humidity, sd.HvacStatus, sd.Mode, sd.EcoMode, heatSetpoint, coolSetpoint,
-		sd.Connectivity, sd.LastUpdateTime,
+		sd.Connectivity.String(), sd.LastUpdateTime,
 	}, nil
 }

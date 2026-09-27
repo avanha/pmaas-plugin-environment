@@ -44,6 +44,7 @@ var ThermostatTemplate = spi.TemplateInfo{
 	FuncMap: template.FuncMap{
 		"CelsiusToFahrenheit": CelsiusToFahrenheit,
 		"RelativeTime":        RelativeTime,
+		"IsOffline":           IsOffline,
 	},
 	Paths:  []string{"templates/thermostat.htmlt"},
 	Styles: []string{"css/thermostat.css"},
@@ -427,6 +428,10 @@ func isCompatibleEntityType(entityType reflect.Type) bool {
 
 func CelsiusToFahrenheit(celsiusValue float32) float32 {
 	return celsiusValue*float32(9)/float32(5) + float32(32)
+}
+
+func IsOffline(connectivity environmental.Connectivity) bool {
+	return connectivity == environmental.ConnectivityOffline
 }
 
 func RelativeTime(timeValue time.Time) string {
