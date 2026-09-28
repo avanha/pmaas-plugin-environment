@@ -86,6 +86,7 @@ func (p *plugin) startNetDiscovery() {
 		InterfaceName: config.InterfaceName,
 		EnableSend:    config.EnableAnnounce,
 		EnableReceive: config.EnableDiscover || config.EnableAnnounce,
+		TTL:           config.TTL,
 	})
 	if err != nil {
 		// Net discovery is an optional add-on to a plugin that's otherwise fully functional

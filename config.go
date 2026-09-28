@@ -23,6 +23,13 @@ type NetDiscoveryConfig struct {
 	// InterfaceName pins discovery traffic to one network interface (e.g. "en0"). Strongly
 	// recommended on any multi-homed host - see discovery.Config.InterfaceName.
 	InterfaceName string
+
+	// TTL is the IP hop count on announced/sent packets. Left at its zero value, discovery
+	// traffic never leaves the local network segment - see discovery.Config.TTL for why that's
+	// the safe default, and what has to be true on the network (real multicast routing or an
+	// IGMP-proxy feature bridging the relevant subnets, not just IGMP snooping/querier) before
+	// raising this to let it cross a router onto another subnet/VLAN.
+	TTL int
 }
 
 type PluginConfig struct {
