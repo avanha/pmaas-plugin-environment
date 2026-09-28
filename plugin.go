@@ -35,6 +35,7 @@ var WirelessThermometerTemplate = spi.TemplateInfo{
 		"CelsiusToFahrenheit": CelsiusToFahrenheit,
 		"RelativeTime":        RelativeTime,
 		"IsStale":             IsStale,
+		"IsLowBattery":        IsLowBattery,
 	},
 	Paths:  []string{"templates/wireless_thermometer.htmlt"},
 	Styles: []string{"css/wireless_thermometer.css"},
@@ -458,6 +459,14 @@ const staleThreshold = time.Hour
 
 func IsStale(timeValue time.Time) bool {
 	return !timeValue.IsZero() && time.Since(timeValue) > staleThreshold
+}
+
+// lowBatteryThreshold is the battery percentage below which a wireless thermometer's
+// battery icon is flagged as low.
+const lowBatteryThreshold = 10
+
+func IsLowBattery(level int) bool {
+	return level < lowBatteryThreshold
 }
 
 func RelativeTime(timeValue time.Time) string {
