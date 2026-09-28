@@ -59,6 +59,7 @@ type state struct {
 	entities             map[string]common.IStateTracker
 	entityCounter        int
 	eventReceiverHandles map[string]int
+	netDiscovery         *netDiscovery
 }
 
 func (s *state) nextEntityId() int {
@@ -114,10 +115,14 @@ func (p *plugin) Start() {
 	p.registerEventHandlers()
 	// TODO: Retrieve the list of possible entities to add to our map.
 	// Without it, we depend on the plugin ordering to ensure we get any devices in existence prior to our registration.
+
+	p.startNetDiscovery()
 }
 
 func (p *plugin) Stop() chan func() {
 	fmt.Printf("%T Stopping...\n", *p)
+
+	p.stopNetDiscovery()
 
 	return p.state.container.ClosedCallbackChannel()
 }
@@ -316,6 +321,7 @@ func (p *plugin) registerWirelessThermometer(event events.EntityRegisteredEvent)
 
 	if err == nil {
 		instance.PmaasEntityId = pmaasEntityId
+		p.announceEntityChange()
 	} else {
 		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
 	}
@@ -340,6 +346,7 @@ func (p *plugin) registerThermostat(event events.EntityRegisteredEvent) {
 
 	if err == nil {
 		instance.PmaasEntityId = pmaasEntityId
+		p.announceEntityChange()
 	} else {
 		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
 	}
@@ -363,12 +370,16 @@ func (p *plugin) onEntityStateChanged(eventInfo *events.EventInfo) error {
 		return errors.New(fmt.Sprintf("Entity %s is not tracked", event.Id))
 	}
 
-	return entity.ProcessNewState(event.NewState, func(pmassEntityId string, event any) {
+	err := entity.ProcessNewState(event.NewState, func(pmassEntityId string, event any) {
 		err := p.state.container.BroadcastEvent(pmassEntityId, event)
 		if err != nil {
 			fmt.Printf("%T Error broadcasting event %v", p, event)
 		}
 	})
+
+	p.announceEntityChange()
+
+	return err
 }
 
 func (p *plugin) wirelessThermometerRendererFactory() (spi.EntityRenderer, error) {
