@@ -34,6 +34,7 @@ var WirelessThermometerTemplate = spi.TemplateInfo{
 	FuncMap: template.FuncMap{
 		"CelsiusToFahrenheit": CelsiusToFahrenheit,
 		"RelativeTime":        RelativeTime,
+		"IsStale":             IsStale,
 	},
 	Paths:  []string{"templates/wireless_thermometer.htmlt"},
 	Styles: []string{"css/wireless_thermometer.css"},
@@ -449,6 +450,14 @@ func FormatConnectivityTime(timeValue time.Time) string {
 	}
 
 	return timeValue.Format("2006-01-02 3:04:05 PM")
+}
+
+// staleThreshold is how long a wireless thermometer can go without a sensor
+// update before it's considered stale (e.g. the device went offline).
+const staleThreshold = time.Hour
+
+func IsStale(timeValue time.Time) bool {
+	return !timeValue.IsZero() && time.Since(timeValue) > staleThreshold
 }
 
 func RelativeTime(timeValue time.Time) string {

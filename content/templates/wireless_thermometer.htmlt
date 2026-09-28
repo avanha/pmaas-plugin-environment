@@ -1,4 +1,7 @@
 <div class="entity-environment-wireless-thermometer">
+    {{if and (not .SensorData.IsEmpty) (IsStale .SensorData.LastUpdateTime)}}
+        <div class="stale-warning" title="No update in over an hour"><i class="bi bi-exclamation-triangle-fill"></i></div>
+    {{end}}
     <div class="title-row">
         <div class="name">{{.Name}}</div>
         {{if not .RSSIData.IsEmpty}}

@@ -1,5 +1,13 @@
 .entity-environment-wireless-thermometer {
+    position: relative;
+}
 
+.entity-environment-wireless-thermometer .stale-warning {
+    position: absolute;
+    top: 0;
+    right: 0;
+    color: #d0021b;
+    font-size: 14pt;
 }
 
 .entity-environment-wireless-thermometer .title-row {
