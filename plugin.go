@@ -93,12 +93,15 @@ func NewPlugin(config PluginConfig) Plugin {
 // Force implementation of spi.IPMAASPlugin
 var _ spi.IPMAASPlugin = (*plugin)(nil)
 
+func (p *plugin) ShortName() string {
+	return "environment"
+}
+
 func (p *plugin) Init(container spi.IPMAASContainer) {
 	p.state.container = container
 	container.ProvideContentFS(&contentFS, "content")
 	container.EnableStaticContent("static")
-	container.AddRoute("/plugins/environment/", p.handleHttpListRequest)
-
+	container.AddRoute("", p.handleHttpListRequest)
 }
 
 func (p *plugin) Start() {
