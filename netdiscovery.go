@@ -68,8 +68,11 @@ type remoteEntityMeta struct {
 // without ever creating shadow entities from peers, or vice versa), but they share one
 // Transport/Service, and the underlying transport's send/receive directions are derived from
 // both flags together rather than mapped 1:1:
-//   - send is needed whenever EnableAnnounce is set (to publish Announce, and to answer a
-//     received Query with one).
+//   - send is needed whenever EITHER flag is set: EnableAnnounce needs it to publish Announce
+//     and to answer a received Query with one, but EnableDiscover needs it too, on its own -
+//     "anyone here with thermometers?" is itself an outbound message (the initial Query sent
+//     below), so a discover-only node still has to be allowed to send, even though it never
+//     announces anything of its own.
 //   - receive is needed whenever EnableDiscover is set (to see peers' Announce), but *also*
 //     whenever EnableAnnounce is set on its own (to see incoming Query requests to answer -
 //     an announce-only node still needs to listen for the thing it's responding to).
@@ -84,7 +87,7 @@ func (p *plugin) startNetDiscovery() {
 	transport, err := discovery.NewTransport(instanceID, discovery.Config{
 		GroupAddress:  config.GroupAddress,
 		InterfaceName: config.InterfaceName,
-		EnableSend:    config.EnableAnnounce,
+		EnableSend:    config.EnableAnnounce || config.EnableDiscover,
 		EnableReceive: config.EnableDiscover || config.EnableAnnounce,
 		TTL:           config.TTL,
 	})
