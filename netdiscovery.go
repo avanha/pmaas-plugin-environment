@@ -3,6 +3,7 @@ package environment
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"reflect"
 	"strings"
@@ -17,6 +18,12 @@ import (
 	spienvironment "github.com/avanha/pmaas-spi/environment"
 	"github.com/avanha/pmaas-spi/tracking"
 )
+
+// netDiscoveryQueryResponseJitter bounds a random delay applied before responding to a Query,
+// so a segment with several announcing peers doesn't have all of them reply in the same
+// instant - the same thundering-herd concern mDNS (RFC 6762) addresses the same way for its own
+// query responses.
+const netDiscoveryQueryResponseJitter = 250 * time.Millisecond
 
 // remoteEntityIdPrefix namespaces every entity mirrored in from a peer's Announce, so it can
 // never collide with a locally-sourced entity's own id, and so the peer that owns it is always
@@ -172,6 +179,13 @@ func (p *plugin) stopNetDiscovery() {
 	if err := p.state.netDiscovery.service.Close(); err != nil {
 		fmt.Printf("%T stopNetDiscovery: error closing discovery service: %v\n", *p, err)
 	}
+
+	// Nil this out (rather than leaving a pointer to an already-closed Service/Transport
+	// around) so anything that might still run after this point - notably a query response
+	// jitter timer that was already pending when Stop was called - can tell discovery has
+	// actually been torn down and skip touching it, instead of trying to send through a closed
+	// connection and just logging the resulting error.
+	p.state.netDiscovery = nil
 }
 
 // runNetDiscoveryEventLoop reads decoded Envelopes as they arrive on the discovery Service's
@@ -240,8 +254,31 @@ func (p *plugin) handleDiscoveryQuery(event discovery.Event) {
 		return
 	}
 
+	// Respond after a random delay rather than immediately - see
+	// netDiscoveryQueryResponseJitter. time.AfterFunc fires on its own goroutine, so this never
+	// blocks the plugin's own goroutine (which is what's running handleDiscoveryQuery right
+	// now) for the delay; the actual send is enqueued back onto it when the timer fires, the
+	// same way every other access to plugin state already has to be.
+	delay := time.Duration(rand.Int64N(int64(netDiscoveryQueryResponseJitter)))
+	time.AfterFunc(delay, func() {
+		err := p.state.container.EnqueueOnPluginGoRoutine(func() {
+			p.respondToDiscoveryQuery(event)
+		})
+		if err != nil {
+			fmt.Printf("%T handleDiscoveryQuery: unable to enqueue delayed response to %s: %v\n", *p, event.Sender, err)
+		}
+	})
+}
+
+func (p *plugin) respondToDiscoveryQuery(event discovery.Event) {
+	if p.state.netDiscovery == nil || !p.config.NetDiscovery.EnableAnnounce {
+		// Net discovery (or specifically announcing) may have been stopped in the time it took
+		// this response's jitter delay to elapse - nothing to do in that case.
+		return
+	}
+
 	if err := p.state.netDiscovery.service.SendAnnounce(p.buildEntityAnnouncements()); err != nil {
-		fmt.Printf("%T handleDiscoveryQuery: unable to respond to query from %s: %v\n", *p, event.Sender, err)
+		fmt.Printf("%T respondToDiscoveryQuery: unable to respond to query from %s: %v\n", *p, event.Sender, err)
 	}
 }
 
