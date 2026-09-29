@@ -274,6 +274,28 @@ func (p *plugin) handleDiscoveryAnnounce(event discovery.Event) {
 func (p *plugin) applyRemoteAnnouncement(event discovery.Event, announcement discovery.EntityAnnouncement) error {
 	id := remoteEntityId(event.Sender, announcement.EntityId)
 
+	// Prefer a local copy of the same device over mirroring it: announcement.EntityId is the
+	// raw id the announcing node itself registered it under (see buildEntityAnnouncements),
+	// and for every current producer that's already a globally-stable identity in its own
+	// right - an SDM device resource string, a Bluetooth MAC address - not a locally-scoped
+	// counter, despite EntityId only being *documented* as unique within the announcing node
+	// (true for a hypothetical future producer that isn't so lucky). A raw id can only ever
+	// collide with a LOCAL entity's map key here, never another peer's mirrored one, since
+	// every mirrored key carries the remoteEntityIdPrefix and a raw device id realistically
+	// never does. This is exactly the case that bit us with Nest thermostats: a node running
+	// its own nestthermostat plugin also hearing the *same* thermostat announced by a peer that
+	// also runs it - without this, both ended up in p.state.entities as two distinct entries
+	// for the same physical device.
+	if _, hasLocalCopy := p.state.entities[announcement.EntityId]; hasLocalCopy {
+		// If an earlier Announce already created a mirrored duplicate (e.g. before this node's
+		// own local copy existed, or before this check existed), remove it now rather than
+		// leaving a stale duplicate sitting around indefinitely.
+		if _, staleShadowExists := p.state.entities[id]; staleShadowExists {
+			p.removeRemoteEntity(id)
+		}
+		return nil
+	}
+
 	tracked, exists := p.state.entities[id]
 	if !exists {
 		switch announcement.EntityKind {
