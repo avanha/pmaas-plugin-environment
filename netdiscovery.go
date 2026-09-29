@@ -61,6 +61,11 @@ const netDiscoveryAnnounceInterval = 30 * time.Minute
 // else, just on a slower, TTL-driven schedule.
 const netDiscoveryEntityTTL = 2 * time.Hour
 
+// TODO: This is pretty tightly conflated with plugin.
+// It uses the plugins's go routine and declares methods on the plugin struct.
+// I think it should be a seperate component that communicates with the plugin.  It could still
+// be an actor, but we want to move work off the Mailbox, like JSON decoding.
+
 // netDiscovery holds the running discovery.Transport/Service for this plugin instance, when
 // net discovery is enabled at all (see NetDiscoveryConfig). nil when neither EnableAnnounce
 // nor EnableDiscover is set, so the rest of the plugin never has to check config in addition
@@ -168,6 +173,7 @@ func randomDelayIn(minDelay, maxDelay time.Duration) time.Duration {
 	return minDelay + time.Duration(rand.Int64N(int64(maxDelay-minDelay)))
 }
 
+// TODO: This should be done in the init method in plugin, and passed in here.
 // loadOrCreateSenderId returns this installation's persisted net-discovery identity, creating
 // and saving one on first use. It's deliberately separate from discovery.NewInstanceID's
 // per-process randomness: reusing the same id across restarts is what lets a peer recognize
@@ -605,6 +611,7 @@ func (p *plugin) remoteEntityIdsForSender(senderId discovery.InstanceID) []strin
 	return ids
 }
 
+// TODO: Implement the deboaunce.  Do we send all states whenever one changes or only the one that changed?
 // announceEntityChange re-announces this node's full current entity set if EnableAnnounce is
 // set. Called both on the netDiscoveryAnnounceInterval heartbeat (runNetDiscoveryTicker) and
 // after any local change to p.state.entities (see registerWirelessThermometer,
