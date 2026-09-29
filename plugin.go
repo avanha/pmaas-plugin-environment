@@ -26,8 +26,8 @@ import (
 //go:embed content/static content/templates
 var contentFS embed.FS
 
-var IWirelessThermometerType = reflect.TypeOf((*environmental.IWirelessThermometer)(nil)).Elem()
-var IThermostatType = reflect.TypeOf((*environmental.IThermostat)(nil)).Elem()
+var IWirelessThermometerType = reflect.TypeFor[environmental.IWirelessThermometer]()
+var IThermostatType = reflect.TypeFor[environmental.IThermostat]()
 
 var WirelessThermometerTemplate = spi.TemplateInfo{
 	Name: "environment_wireless_thermometer",
@@ -108,9 +108,9 @@ func (p *plugin) Init(container spi.IPMAASContainer) {
 func (p *plugin) Start() {
 	fmt.Printf("%T Starting...\n", *p)
 	p.state.container.RegisterEntityRenderer(
-		reflect.TypeOf((*thermometer.WirelessThermometer)(nil)).Elem(), p.wirelessThermometerRendererFactory)
+		reflect.TypeFor[thermometer.WirelessThermometer](), p.wirelessThermometerRendererFactory)
 	p.state.container.RegisterEntityRenderer(
-		reflect.TypeOf((*thermometer.Thermostat)(nil)).Elem(), p.thermostatRendererFactory)
+		reflect.TypeFor[thermometer.Thermostat](), p.thermostatRendererFactory)
 
 	p.registerEventHandlers()
 	// TODO: Retrieve the list of possible entities to add to our map.
@@ -209,13 +209,14 @@ func (p *plugin) handleHttpListRequest(w http.ResponseWriter, r *http.Request) {
 		default:
 			itemType := reflect.TypeOf(typedItem)
 			itemTypeKind := itemType.Kind()
-			if itemTypeKind == reflect.Struct {
+			switch itemTypeKind {
+			case reflect.Struct:
 				// This is a generic way to construct a pointer to struct
 				//fmt.Printf("items[%v] kind: %v\n", i, itemTypeKind)
 				typedItemPointer := reflect.New(itemType)
 				typedItemPointer.Elem().Set(reflect.ValueOf(typedItem))
 				itemRefs[i] = typedItemPointer.Interface()
-			} else if itemTypeKind == reflect.Interface || itemTypeKind == reflect.Ptr {
+			case reflect.Interface, reflect.Pointer:
 				// Interfaces and pointers are already references and don't need any conversion.
 				//fmt.Printf("items[%v] kind: %v\n", i, itemTypeKind)
 				itemRefs[i] = typedItem
@@ -265,7 +266,7 @@ func (p *plugin) onEntityRegistered(eventInfo *events.EventInfo) error {
 	_, ok := p.state.entities[event.Id]
 
 	if ok {
-		return errors.New(fmt.Sprintf("Entity %s already tracked", event.Id))
+		return fmt.Errorf("Entity %s already tracked", event.Id)
 	}
 
 	// A remote-mirrored shadow of this exact device may already exist (announced by a peer
@@ -373,7 +374,7 @@ func (p *plugin) onEntityStateChanged(eventInfo *events.EventInfo) error {
 	entity, ok := p.state.entities[sourceEntityId]
 
 	if !ok {
-		return errors.New(fmt.Sprintf("Entity %s is not tracked", event.Id))
+		return fmt.Errorf("Entity %s is not tracked", event.Id)
 	}
 
 	err := entity.ProcessNewState(event.NewState, func(pmassEntityId string, event any) {
@@ -490,7 +491,7 @@ func IsLowBattery(level int) bool {
 }
 
 func RelativeTime(timeValue time.Time) string {
-	elapsed := time.Now().Sub(timeValue).Truncate(time.Second)
+	elapsed := time.Since(timeValue).Truncate(time.Second)
 
 	if elapsed.Seconds() < 30 {
 		return "< 30s"
