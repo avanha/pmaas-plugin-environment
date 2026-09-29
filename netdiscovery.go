@@ -25,10 +25,28 @@ import (
 // query responses.
 const netDiscoveryQueryResponseJitter = 250 * time.Millisecond
 
+// netDiscoveryStartupDelayMin/Max bound a random delay before this node's very first "anyone
+// here?" Query, so a whole fleet of nodes coming up together (e.g. all rebooting after a power
+// outage) doesn't have every one of them send it in the same instant - the same
+// thundering-herd concern netDiscoveryQueryResponseJitter addresses for query *responses*, just
+// at a much coarser, once-per-process-lifetime granularity appropriate to a startup event
+// rather than a single query.
+const (
+	netDiscoveryStartupDelayMin = 20 * time.Second
+	netDiscoveryStartupDelayMax = 1 * time.Minute
+)
+
 // remoteEntityIdPrefix namespaces every entity mirrored in from a peer's Announce, so it can
 // never collide with a locally-sourced entity's own id, and so the peer that owns it is always
 // recoverable from the id alone (see remoteEntityId).
 const remoteEntityIdPrefix = "net:"
+
+// senderIdHexLength is the fixed length of every discovery.InstanceID (see NewInstanceID: 16
+// random bytes, hex-encoded) - used to unambiguously pick the sender-id portion back out of a
+// remoteEntityId (see remoteEntityIdsForRawId), rather than relying on a plain substring/suffix
+// match that could in principle be fooled by a raw id that happens to end the same way as
+// another device's raw id.
+const senderIdHexLength = 32
 
 // netDiscoveryAnnounceInterval is both how often an EnableAnnounce node re-announces its full
 // entity set (a heartbeat, on top of the change-triggered announces already sent by
@@ -120,11 +138,34 @@ func (p *plugin) startNetDiscovery() {
 	if config.EnableDiscover {
 		// "Anyone here with thermometers?" - ask once at startup so entities from peers that
 		// have been running for a while show up promptly, rather than waiting on the next
-		// netDiscoveryAnnounceInterval heartbeat.
-		if err := nd.service.SendQuery(); err != nil {
-			fmt.Printf("%T startNetDiscovery: unable to send initial query: %v\n", *p, err)
-		}
+		// netDiscoveryAnnounceInterval heartbeat. Delayed rather than sent immediately - see
+		// netDiscoveryStartupDelayMin/Max - and, like the query-response jitter, dispatched via
+		// time.AfterFunc so the delay never blocks the plugin's own goroutine (which is what's
+		// running startNetDiscovery right now, as part of Start()).
+		delay := randomDelayIn(netDiscoveryStartupDelayMin, netDiscoveryStartupDelayMax)
+		time.AfterFunc(delay, func() {
+			err := p.state.container.EnqueueOnPluginGoRoutine(p.sendInitialDiscoveryQuery)
+			if err != nil {
+				fmt.Printf("%T startNetDiscovery: unable to enqueue initial query: %v\n", *p, err)
+			}
+		})
 	}
+}
+
+func (p *plugin) sendInitialDiscoveryQuery() {
+	if p.state.netDiscovery == nil {
+		// Stopped before the startup delay elapsed - nothing to do.
+		return
+	}
+
+	if err := p.state.netDiscovery.service.SendQuery(); err != nil {
+		fmt.Printf("%T sendInitialDiscoveryQuery: unable to send: %v\n", *p, err)
+	}
+}
+
+// randomDelayIn returns a random duration in [minDelay, maxDelay).
+func randomDelayIn(minDelay, maxDelay time.Duration) time.Duration {
+	return minDelay + time.Duration(rand.Int64N(int64(maxDelay-minDelay)))
 }
 
 // loadOrCreateSenderId returns this installation's persisted net-discovery identity, creating
@@ -259,7 +300,7 @@ func (p *plugin) handleDiscoveryQuery(event discovery.Event) {
 	// blocks the plugin's own goroutine (which is what's running handleDiscoveryQuery right
 	// now) for the delay; the actual send is enqueued back onto it when the timer fires, the
 	// same way every other access to plugin state already has to be.
-	delay := time.Duration(rand.Int64N(int64(netDiscoveryQueryResponseJitter)))
+	delay := randomDelayIn(0, netDiscoveryQueryResponseJitter)
 	time.AfterFunc(delay, func() {
 		err := p.state.container.EnqueueOnPluginGoRoutine(func() {
 			p.respondToDiscoveryQuery(event)
@@ -506,6 +547,49 @@ func remoteEntityId(senderId discovery.InstanceID, announcedId string) string {
 
 func isRemoteEntityId(id string) bool {
 	return strings.HasPrefix(id, remoteEntityIdPrefix)
+}
+
+// removeRemoteShadowsOf removes every remote-mirrored shadow entity for rawId, from whichever
+// peer(s) announced it, if any exist. Called when a LOCAL entity for the exact same raw id is
+// about to be registered (see onEntityRegistered), so the local, authoritative copy always
+// wins over a mirrored one - the reverse of the ordering applyRemoteAnnouncement already
+// handles (there, the local copy already existed when the remote Announce arrived; here, the
+// remote shadow already exists when the local copy arrives).
+func (p *plugin) removeRemoteShadowsOf(rawId string) {
+	if !p.config.NetDiscovery.EnableDiscover {
+		// No remote shadow could exist at all without EnableDiscover - see
+		// handleDiscoveryAnnounce's own identical guard.
+		return
+	}
+
+	for _, id := range p.remoteEntityIdsForRawId(rawId) {
+		p.removeRemoteEntity(id)
+	}
+}
+
+// remoteEntityIdsForRawId returns every locally-mirrored entity id whose raw, un-namespaced
+// device id is exactly rawId, regardless of which peer announced it. There's realistically at
+// most one, but this doesn't assume that.
+func (p *plugin) remoteEntityIdsForRawId(rawId string) []string {
+	suffix := ":" + rawId
+	var ids []string
+
+	for id := range p.state.entities {
+		if !isRemoteEntityId(id) || !strings.HasSuffix(id, suffix) {
+			continue
+		}
+
+		// Confirm what's between "net:" and this suffix is exactly one sender id, not just a
+		// coincidental substring match.
+		senderPortion := strings.TrimSuffix(strings.TrimPrefix(id, remoteEntityIdPrefix), suffix)
+		if len(senderPortion) != senderIdHexLength {
+			continue
+		}
+
+		ids = append(ids, id)
+	}
+
+	return ids
 }
 
 func (p *plugin) remoteEntityIdsForSender(senderId discovery.InstanceID) []string {

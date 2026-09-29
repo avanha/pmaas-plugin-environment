@@ -268,6 +268,12 @@ func (p *plugin) onEntityRegistered(eventInfo *events.EventInfo) error {
 		return errors.New(fmt.Sprintf("Entity %s already tracked", event.Id))
 	}
 
+	// A remote-mirrored shadow of this exact device may already exist (announced by a peer
+	// before this node's own local copy got registered) - remove it now that a local,
+	// authoritative copy is arriving, so the local one always wins over a mirrored one
+	// regardless of which arrived first.
+	p.removeRemoteShadowsOf(event.Id)
+
 	if event.EntityType.AssignableTo(IThermostatType) {
 		p.registerThermostat(event)
 	} else {
