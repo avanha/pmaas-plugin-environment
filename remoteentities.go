@@ -54,45 +54,87 @@ func (p *plugin) buildEntitySnapshots() []EntitySnapshot {
 			continue
 		}
 
-		var kind, name string
-		var portableState any
-
-		switch state := tracked.GetState().(type) {
-		case thermometer.WirelessThermometer:
-			kind, name, portableState = "WirelessThermometer", state.Name, spienvironment.WirelessThermometer{
-				Name:        state.Name,
-				RSSIData:    state.RSSIData,
-				BatteryData: state.BatteryData,
-				SensorData:  state.SensorData,
-			}
-		case thermometer.Thermostat:
-			kind, name, portableState = "Thermostat", state.Name, spienvironment.Thermostat{
-				Name:           state.Name,
-				SensorData:     state.SensorData,
-				HvacStatus:     state.HvacStatus,
-				Mode:           state.Mode,
-				EcoMode:        state.EcoMode,
-				HeatSetpoint:   state.HeatSetpoint,
-				CoolSetpoint:   state.CoolSetpoint,
-				Connectivity:   state.Connectivity,
-				OfflineSince:   state.OfflineSince,
-				OnlineSince:    state.OnlineSince,
-				LastUpdateTime: state.SensorData.LastUpdateTime,
-			}
-		default:
-			continue
+		if snapshot, ok := entitySnapshotFor(id, tracked); ok {
+			snapshots = append(snapshots, snapshot)
 		}
-
-		snapshots = append(snapshots, EntitySnapshot{
-			RawId: id,
-			Kind:  kind,
-			Name:  name,
-			State: portableState,
-			AsOf:  time.Now(),
-		})
 	}
 
 	return snapshots
+}
+
+type entityLookupResult struct {
+	snapshot EntitySnapshot
+	found    bool
+}
+
+// SnapshotOne implements remoteEntitySink. Reads p.state.entities, so it has to run on the
+// plugin's own goroutine - see spi.Exec.
+func (p *plugin) SnapshotOne(rawId string) (EntitySnapshot, bool) {
+	result, err := spi.Exec(p.state.container, func() entityLookupResult {
+		snapshot, found := p.buildEntitySnapshotFor(rawId)
+		return entityLookupResult{snapshot: snapshot, found: found}
+	})
+	if err != nil {
+		fmt.Printf("%T SnapshotOne: unable to read entity %s: %v\n", *p, rawId, err)
+		return EntitySnapshot{}, false
+	}
+	return result.snapshot, result.found
+}
+
+// buildEntitySnapshotFor is SnapshotOne's single-entity counterpart to buildEntitySnapshots - see
+// its doc for the isRemoteEntityId skip. Must run on the plugin's own goroutine - see SnapshotOne.
+func (p *plugin) buildEntitySnapshotFor(rawId string) (EntitySnapshot, bool) {
+	if isRemoteEntityId(rawId) {
+		return EntitySnapshot{}, false
+	}
+
+	tracked, ok := p.state.entities[rawId]
+	if !ok {
+		return EntitySnapshot{}, false
+	}
+
+	return entitySnapshotFor(rawId, tracked)
+}
+
+// entitySnapshotFor converts a single tracked entity into netDiscovery's portable shape. false
+// if tracked's concrete type isn't one this plugin announces over the network.
+func entitySnapshotFor(id string, tracked common.IStateTracker) (EntitySnapshot, bool) {
+	var kind, name string
+	var portableState any
+
+	switch state := tracked.GetState().(type) {
+	case thermometer.WirelessThermometer:
+		kind, name, portableState = "WirelessThermometer", state.Name, spienvironment.WirelessThermometer{
+			Name:        state.Name,
+			RSSIData:    state.RSSIData,
+			BatteryData: state.BatteryData,
+			SensorData:  state.SensorData,
+		}
+	case thermometer.Thermostat:
+		kind, name, portableState = "Thermostat", state.Name, spienvironment.Thermostat{
+			Name:           state.Name,
+			SensorData:     state.SensorData,
+			HvacStatus:     state.HvacStatus,
+			Mode:           state.Mode,
+			EcoMode:        state.EcoMode,
+			HeatSetpoint:   state.HeatSetpoint,
+			CoolSetpoint:   state.CoolSetpoint,
+			Connectivity:   state.Connectivity,
+			OfflineSince:   state.OfflineSince,
+			OnlineSince:    state.OnlineSince,
+			LastUpdateTime: state.SensorData.LastUpdateTime,
+		}
+	default:
+		return EntitySnapshot{}, false
+	}
+
+	return EntitySnapshot{
+		RawId: id,
+		Kind:  kind,
+		Name:  name,
+		State: portableState,
+		AsOf:  time.Now(),
+	}, true
 }
 
 // ApplyRemoteAnnouncement implements remoteEntitySink.

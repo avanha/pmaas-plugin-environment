@@ -68,9 +68,16 @@ type RemoteEntityRef struct {
 // remoteentities.go).
 type remoteEntitySink interface {
 	// Snapshot returns this node's own, locally-sourced entities (never a remote-mirrored
-	// shadow) as portable data, for building an outgoing Announce - used both for the periodic/
-	// change-triggered heartbeat and for answering a peer's Query.
+	// shadow) as portable data, for building an outgoing Announce - used for the periodic
+	// heartbeat and for answering a peer's Query.
 	Snapshot() []EntitySnapshot
+
+	// SnapshotOne returns the single locally-sourced entity identified by rawId, as portable
+	// data - used for a change-triggered announce (see NotifyEntityChanged/announceOne), so a
+	// single state change doesn't require re-encoding and re-sending every other entity this
+	// node knows about. false if rawId isn't a current, locally-sourced entity (already removed,
+	// or itself a remote-mirrored shadow).
+	SnapshotOne(rawId string) (EntitySnapshot, bool)
 
 	// ApplyRemoteAnnouncement mirrors one already-decoded entity announced by sender into the
 	// plugin's own entity map, creating it on first sight and updating it thereafter.
@@ -216,12 +223,13 @@ func (nd *netDiscovery) Stop() {
 	nd.mailbox.Stop()
 }
 
-// NotifyEntityChanged tells netDiscovery that the plugin's own entity set changed, so it
-// re-announces promptly instead of waiting for the next heartbeat - see announceNow. Safe to
-// call any time, including after Stop (the enqueue just fails and is logged).
-func (nd *netDiscovery) NotifyEntityChanged() {
-	if err := nd.mailbox.Send(nd.announceNow); err != nil {
-		fmt.Printf("netDiscovery: unable to enqueue change-triggered announce: %v\n", err)
+// NotifyEntityChanged tells netDiscovery that the entity identified by rawId changed, so it
+// re-announces just that entity promptly instead of waiting for the next heartbeat - see
+// announceOne. Safe to call any time, including after Stop (the enqueue just fails and is
+// logged).
+func (nd *netDiscovery) NotifyEntityChanged(rawId string) {
+	if err := nd.mailbox.Send(func() { nd.announceOne(rawId) }); err != nil {
+		fmt.Printf("netDiscovery: unable to enqueue change-triggered announce for %s: %v\n", rawId, err)
 	}
 }
 
@@ -310,9 +318,9 @@ func (nd *netDiscovery) handleQuery(event discovery.Event) {
 	})
 }
 
-// announceNow asks the sink for the plugin's current entities and sends them as an Announce -
-// shared by the periodic/change-triggered heartbeat (onTick/NotifyEntityChanged) and by query
-// responses (handleQuery), since all three send exactly the same payload.
+// announceNow asks the sink for all of the plugin's current entities and sends them as one
+// Announce - the periodic heartbeat (onTick) and a query response (handleQuery), since both send
+// the full set.
 func (nd *netDiscovery) announceNow() {
 	if !nd.announceEnabled {
 		return
@@ -328,22 +336,56 @@ func (nd *netDiscovery) buildEntityAnnouncements() []discovery.EntityAnnouncemen
 	announcements := make([]discovery.EntityAnnouncement, 0, len(snapshot))
 
 	for _, entity := range snapshot {
-		encodedState, err := json.Marshal(entity.State)
+		announcement, err := encodeAnnouncement(entity)
 		if err != nil {
 			fmt.Printf("netDiscovery: unable to encode state for %s: %v\n", entity.RawId, err)
 			continue
 		}
 
-		announcements = append(announcements, discovery.EntityAnnouncement{
-			EntityId:   entity.RawId,
-			EntityKind: entity.Kind,
-			Name:       entity.Name,
-			State:      encodedState,
-			AsOf:       entity.AsOf,
-		})
+		announcements = append(announcements, announcement)
 	}
 
 	return announcements
+}
+
+// announceOne asks the sink for exactly one entity's current state and sends it alone as a
+// single-element Announce - the change-triggered counterpart to announceNow's full heartbeat, so
+// one state change doesn't require re-encoding and re-sending every other entity this node
+// knows about.
+func (nd *netDiscovery) announceOne(rawId string) {
+	if !nd.announceEnabled {
+		return
+	}
+
+	snapshot, ok := nd.sink.SnapshotOne(rawId)
+	if !ok {
+		return
+	}
+
+	announcement, err := encodeAnnouncement(snapshot)
+	if err != nil {
+		fmt.Printf("netDiscovery: unable to encode state for %s: %v\n", rawId, err)
+		return
+	}
+
+	if err := nd.service.SendAnnounce([]discovery.EntityAnnouncement{announcement}); err != nil {
+		fmt.Printf("netDiscovery: unable to announce %s: %v\n", rawId, err)
+	}
+}
+
+func encodeAnnouncement(entity EntitySnapshot) (discovery.EntityAnnouncement, error) {
+	encodedState, err := json.Marshal(entity.State)
+	if err != nil {
+		return discovery.EntityAnnouncement{}, err
+	}
+
+	return discovery.EntityAnnouncement{
+		EntityId:   entity.RawId,
+		EntityKind: entity.Kind,
+		Name:       entity.Name,
+		State:      encodedState,
+		AsOf:       entity.AsOf,
+	}, nil
 }
 
 // handleAnnounce mirrors a peer's announced entities in, decoding each one's state here - on

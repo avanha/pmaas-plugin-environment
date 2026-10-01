@@ -198,11 +198,12 @@ func (p *plugin) loadOrCreateSenderId() discovery.InstanceID {
 	return senderId
 }
 
-// notifyEntityChanged tells netDiscovery (if running) that the plugin's own entity set changed,
-// so it re-announces promptly instead of waiting for its next heartbeat.
-func (p *plugin) notifyEntityChanged() {
+// notifyEntityChanged tells netDiscovery (if running) that the entity identified by rawId
+// changed, so it re-announces just that entity promptly instead of waiting for its next
+// heartbeat.
+func (p *plugin) notifyEntityChanged(rawId string) {
 	if p.state.netDiscovery != nil {
-		p.state.netDiscovery.NotifyEntityChanged()
+		p.state.netDiscovery.NotifyEntityChanged(rawId)
 	}
 }
 
@@ -407,7 +408,7 @@ func (p *plugin) registerWirelessThermometer(event events.EntityRegisteredEvent)
 
 	if err == nil {
 		instance.PmaasEntityId = pmaasEntityId
-		p.notifyEntityChanged()
+		p.notifyEntityChanged(event.Id)
 	} else {
 		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
 	}
@@ -432,7 +433,7 @@ func (p *plugin) registerThermostat(event events.EntityRegisteredEvent) {
 
 	if err == nil {
 		instance.PmaasEntityId = pmaasEntityId
-		p.notifyEntityChanged()
+		p.notifyEntityChanged(event.Id)
 	} else {
 		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
 	}
@@ -463,7 +464,7 @@ func (p *plugin) onEntityStateChanged(eventInfo *events.EventInfo) error {
 		}
 	})
 
-	p.notifyEntityChanged()
+	p.notifyEntityChanged(sourceEntityId)
 
 	return err
 }
