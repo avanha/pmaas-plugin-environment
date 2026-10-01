@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/avanha/pmaas-common/net/discovery"
+	"github.com/avanha/pmaas-plugin-environment/config"
 	"github.com/avanha/pmaas-plugin-environment/data"
 	"github.com/avanha/pmaas-plugin-environment/entities"
 	"github.com/avanha/pmaas-plugin-environment/internal/common"
@@ -125,6 +127,83 @@ func (p *plugin) Stop() chan func() {
 	p.stopNetDiscovery()
 
 	return p.state.container.ClosedCallbackChannel()
+}
+
+// startNetDiscovery brings up this plugin's netDiscovery actor per p.config.NetDiscovery, if any
+// of it is enabled - a fully-disabled config is a no-op. The actual discovery protocol lives
+// entirely in netDiscovery (see netdiscovery.go); this is just the plugin-side wiring: resolving
+// this installation's persisted sender identity and passing *p as the remoteEntitySink.
+func (p *plugin) startNetDiscovery() {
+	netDiscoveryConfig := p.config.NetDiscovery
+	if !netDiscoveryConfig.EnableAnnounce && !netDiscoveryConfig.EnableDiscover {
+		return
+	}
+
+	instanceID := p.loadOrCreateSenderId()
+
+	nd, err := newNetDiscovery(instanceID, netDiscoveryConfig, p)
+	if err != nil {
+		// Net discovery is an optional add-on to a plugin that's otherwise fully functional
+		// without it (local entities still work), so a misconfigured/unavailable network
+		// interface here shouldn't take the whole plugin down - log and continue without it.
+		fmt.Printf("%T startNetDiscovery: unable to start (continuing without it): %v\n", *p, err)
+		return
+	}
+
+	p.state.netDiscovery = nd
+}
+
+func (p *plugin) stopNetDiscovery() {
+	if p.state.netDiscovery == nil {
+		return
+	}
+
+	p.state.netDiscovery.Stop()
+	p.state.netDiscovery = nil
+}
+
+// loadOrCreateSenderId returns this installation's persisted net-discovery identity, creating
+// and saving one on first use. It's deliberately separate from discovery.NewInstanceID's
+// per-process randomness: reusing the same id across restarts is what lets a peer recognize
+// "this is the same node I heard from before" rather than seeing what looks like a new peer,
+// with a full new set of entities, every time this plugin restarts. See
+// config.PersistentConfigV1.NetDiscoverySenderId for how to reset it.
+func (p *plugin) loadOrCreateSenderId() discovery.InstanceID {
+	persistentConfig, _ := p.state.container.LoadConfig(func(typeName string) any {
+		v1Type := reflect.TypeFor[config.PersistentConfigV1]()
+		v1TypeName := v1Type.PkgPath() + "/" + v1Type.Name()
+
+		if typeName == v1TypeName {
+			return &config.PersistentConfigV1{}
+		}
+
+		return nil
+	})
+
+	if persistentConfig != nil {
+		if loaded, ok := persistentConfig.(*config.PersistentConfigV1); ok && loaded.NetDiscoverySenderId != "" {
+			return discovery.InstanceID(loaded.NetDiscoverySenderId)
+		}
+	}
+
+	senderId := discovery.NewInstanceID()
+
+	err := p.state.container.SaveConfig(config.PersistentConfigV1{
+		NetDiscoverySenderId: string(senderId),
+	})
+	if err != nil {
+		fmt.Printf("%T loadOrCreateSenderId: unable to persist new sender id: %v\n", *p, err)
+	}
+
+	return senderId
+}
+
+// notifyEntityChanged tells netDiscovery (if running) that the plugin's own entity set changed,
+// so it re-announces promptly instead of waiting for its next heartbeat.
+func (p *plugin) notifyEntityChanged() {
+	if p.state.netDiscovery != nil {
+		p.state.netDiscovery.NotifyEntityChanged()
+	}
 }
 
 func (p *plugin) registerEventHandlers() {
@@ -328,7 +407,7 @@ func (p *plugin) registerWirelessThermometer(event events.EntityRegisteredEvent)
 
 	if err == nil {
 		instance.PmaasEntityId = pmaasEntityId
-		p.announceEntityChange()
+		p.notifyEntityChanged()
 	} else {
 		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
 	}
@@ -353,7 +432,7 @@ func (p *plugin) registerThermostat(event events.EntityRegisteredEvent) {
 
 	if err == nil {
 		instance.PmaasEntityId = pmaasEntityId
-		p.announceEntityChange()
+		p.notifyEntityChanged()
 	} else {
 		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
 	}
@@ -384,7 +463,7 @@ func (p *plugin) onEntityStateChanged(eventInfo *events.EventInfo) error {
 		}
 	})
 
-	p.announceEntityChange()
+	p.notifyEntityChanged()
 
 	return err
 }
