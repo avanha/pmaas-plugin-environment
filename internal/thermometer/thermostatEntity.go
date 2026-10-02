@@ -122,12 +122,7 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 		return entityEvent
 	}
 
-	// TODO: This should be initialized once, when the device is first registered.
-	t.SensorData.HasHumidity = newThermostatState.SensorData.HasHumidity
-
 	nameUpdated := false
-	temperatureUpdated := false
-	humidityUpdated := false
 	hvacStatusUpdated := false
 	modeUpdated := false
 	ecoModeUpdated := false
@@ -177,50 +172,7 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 	// currently have their own change event — just kept current.
 	t.HeatSetpoint = newThermostatState.HeatSetpoint
 	t.CoolSetpoint = newThermostatState.CoolSetpoint
-
-	// Temperature
-	if currentTemperature != newThermostatState.SensorData.Temperature {
-		t.SensorData.Temperature = newThermostatState.SensorData.Temperature
-		t.SensorData.LastUpdateTime = now
-		temperatureUpdated = true
-
-		if now.Day() != t.HighTemperatureTime.Day() {
-			t.HighTemperature = -1000
-			t.LowTemperature = 1000
-		}
-
-		if newThermostatState.SensorData.Temperature > t.HighTemperature {
-			t.HighTemperature = newThermostatState.SensorData.Temperature
-			t.HighTemperatureTime = now
-		}
-
-		if newThermostatState.SensorData.Temperature < t.LowTemperature {
-			t.LowTemperature = newThermostatState.SensorData.Temperature
-			t.LowTemperatureTime = now
-		}
-	}
-
-	// Humidity
-	if currentHumidity != newThermostatState.SensorData.Humidity {
-		t.SensorData.Humidity = newThermostatState.SensorData.Humidity
-		t.SensorData.LastUpdateTime = now
-		humidityUpdated = true
-
-		if now.Day() != t.HighHumidityTime.Day() {
-			t.HighHumidity = -1000
-			t.LowHumidity = 1000
-		}
-
-		if newThermostatState.SensorData.Humidity > t.HighHumidity {
-			t.HighHumidity = newThermostatState.SensorData.Humidity
-			t.HighHumidityTime = now
-		}
-
-		if newThermostatState.SensorData.Humidity < t.LowHumidity {
-			t.LowHumidity = newThermostatState.SensorData.Humidity
-			t.LowHumidityTime = now
-		}
-	}
+	temperatureUpdated, humidityUpdated := t.applySensorData(newThermostatState.SensorData, now)
 
 	if nameUpdated {
 		event := spievents.EntityNameChangedEvent{

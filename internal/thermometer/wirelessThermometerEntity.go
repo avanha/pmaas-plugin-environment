@@ -104,14 +104,9 @@ func (wt *WirelessThermometer) ProcessNewState(newState any, publishEventFunc fu
 		return entityEvent
 	}
 
-	// TODO: This should be initialized once, when the device is first registered.
-	wt.SensorData.HasHumidity = newWirelessThermometerState.SensorData.HasHumidity
-
 	nameUpdated := false
 	rssiUpdated := false
 	batteryLevelUpdated := false
-	temperatureUpdated := false
-	humidityUpdated := false
 	currentName := wt.Name
 	currentTemperature := wt.SensorData.Temperature
 	currentHumidity := wt.SensorData.Humidity
@@ -133,50 +128,7 @@ func (wt *WirelessThermometer) ProcessNewState(newState any, publishEventFunc fu
 		wt.BatteryData.LastUpdateTime = newWirelessThermometerState.BatteryData.LastUpdateTime
 		batteryLevelUpdated = true
 	}
-
-	// Temperature
-	if currentTemperature != newWirelessThermometerState.SensorData.Temperature {
-		wt.SensorData.Temperature = newWirelessThermometerState.SensorData.Temperature
-		wt.SensorData.LastUpdateTime = now
-		temperatureUpdated = true
-
-		if now.Day() != wt.HighTemperatureTime.Day() {
-			wt.HighTemperature = -1000
-			wt.LowTemperature = 1000
-		}
-
-		if newWirelessThermometerState.SensorData.Temperature > wt.HighTemperature {
-			wt.HighTemperature = newWirelessThermometerState.SensorData.Temperature
-			wt.HighTemperatureTime = now
-		}
-
-		if newWirelessThermometerState.SensorData.Temperature < wt.LowTemperature {
-			wt.LowTemperature = newWirelessThermometerState.SensorData.Temperature
-			wt.LowTemperatureTime = now
-		}
-	}
-
-	// Humidity
-	if currentHumidity != newWirelessThermometerState.SensorData.Humidity {
-		wt.SensorData.Humidity = newWirelessThermometerState.SensorData.Humidity
-		wt.SensorData.LastUpdateTime = now
-		humidityUpdated = true
-
-		if now.Day() != wt.HighHumidityTime.Day() {
-			wt.HighHumidity = -1000
-			wt.LowHumidity = 1000
-		}
-
-		if newWirelessThermometerState.SensorData.Humidity > wt.HighHumidity {
-			wt.HighHumidity = newWirelessThermometerState.SensorData.Humidity
-			wt.HighHumidityTime = now
-		}
-
-		if newWirelessThermometerState.SensorData.Humidity < wt.LowHumidity {
-			wt.LowHumidity = newWirelessThermometerState.SensorData.Humidity
-			wt.LowHumidityTime = now
-		}
-	}
+	temperatureUpdated, humidityUpdated := wt.applySensorData(newWirelessThermometerState.SensorData, now)
 
 	if nameUpdated {
 		event := spievents.EntityNameChangedEvent{
@@ -213,7 +165,7 @@ func (wt *WirelessThermometer) ProcessNewState(newState any, publishEventFunc fu
 		publishEventFunc(wt.PmaasEntityId, event)
 	}
 
-	if nameUpdated == false && temperatureUpdated == false && humidityUpdated {
+	if !nameUpdated && !temperatureUpdated && !humidityUpdated && !rssiUpdated && !batteryLevelUpdated {
 		fmt.Printf("State change for %s, but no significant state change detected\n", wt.Id)
 	}
 
