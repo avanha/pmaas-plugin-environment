@@ -1,22 +1,16 @@
 package environment
 
 import (
-	"embed"
-	"errors"
 	"fmt"
-	"html/template"
-	"io"
-	"net/http"
 	"reflect"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/avanha/pmaas-common/net/discovery"
 	"github.com/avanha/pmaas-plugin-environment/config"
 	"github.com/avanha/pmaas-plugin-environment/data"
 	"github.com/avanha/pmaas-plugin-environment/entities"
 	"github.com/avanha/pmaas-plugin-environment/internal/common"
+	httphandler "github.com/avanha/pmaas-plugin-environment/internal/http"
 	"github.com/avanha/pmaas-plugin-environment/internal/thermometer"
 	environmental "github.com/avanha/pmaas-spi/environment"
 	"github.com/avanha/pmaas-spi/events"
@@ -25,36 +19,8 @@ import (
 	"github.com/avanha/pmaas-spi"
 )
 
-//go:embed content/static content/templates
-var contentFS embed.FS
-
 var IWirelessThermometerType = reflect.TypeFor[environmental.IWirelessThermometer]()
 var IThermostatType = reflect.TypeFor[environmental.IThermostat]()
-
-var WirelessThermometerTemplate = spi.TemplateInfo{
-	Name: "environment_wireless_thermometer",
-	FuncMap: template.FuncMap{
-		"CelsiusToFahrenheit": CelsiusToFahrenheit,
-		"RelativeTime":        RelativeTime,
-		"IsStale":             IsStale,
-		"IsLowBattery":        IsLowBattery,
-	},
-	Paths:  []string{"templates/wireless_thermometer.htmlt"},
-	Styles: []string{"css/wireless_thermometer.css"},
-}
-
-var ThermostatTemplate = spi.TemplateInfo{
-	Name: "environment_thermostat",
-	FuncMap: template.FuncMap{
-		"CelsiusToFahrenheit":    CelsiusToFahrenheit,
-		"RelativeTime":           RelativeTime,
-		"IsOffline":              IsOffline,
-		"IsOnline":               IsOnline,
-		"FormatConnectivityTime": FormatConnectivityTime,
-	},
-	Paths:  []string{"templates/thermostat.htmlt"},
-	Styles: []string{"css/thermostat.css"},
-}
 
 type state struct {
 	container            spi.IPMAASContainer
@@ -70,8 +36,9 @@ func (s *state) nextEntityId() int {
 }
 
 type plugin struct {
-	config PluginConfig
-	state  state
+	config      PluginConfig
+	state       state
+	httpHandler *httphandler.Handler
 }
 
 type Plugin interface {
@@ -88,6 +55,7 @@ func NewPlugin(config PluginConfig) Plugin {
 			entityCounter:        0,
 			eventReceiverHandles: make(map[string]int),
 		},
+		httpHandler: httphandler.NewHandler(),
 	}
 
 	return instance
@@ -102,17 +70,11 @@ func (p *plugin) ShortName() string {
 
 func (p *plugin) Init(container spi.IPMAASContainer) {
 	p.state.container = container
-	container.ProvideContentFS(&contentFS, "content")
-	container.EnableStaticContent("static")
-	container.AddRoute("", p.handleHttpListRequest)
+	p.httpHandler.Init(container, &entityStoreAdapter{parent: p})
 }
 
 func (p *plugin) Start() {
 	fmt.Printf("%T Starting...\n", *p)
-	p.state.container.RegisterEntityRenderer(
-		reflect.TypeFor[thermometer.WirelessThermometer](), p.wirelessThermometerRendererFactory)
-	p.state.container.RegisterEntityRenderer(
-		reflect.TypeFor[thermometer.Thermostat](), p.thermostatRendererFactory)
 
 	p.registerEventHandlers()
 	// TODO: Retrieve the list of possible entities to add to our map.
@@ -249,84 +211,6 @@ func (p *plugin) registerEventHandlers() {
 	}
 
 	p.state.eventReceiverHandles["onEntityStateChange"] = handle
-}
-
-var listRenderOptions spi.RenderListOptions = spi.RenderListOptions{
-	Title: "Environmental Devices",
-}
-
-func (p *plugin) handleHttpListRequest(w http.ResponseWriter, r *http.Request) {
-	// First, get the current state of all entities.  HTTP requests come in on arbitrary Go routines,
-	// so execute getEntities on the main plugin Go routine to get all states atomically.
-	resultCh := make(chan []any)
-	err := p.state.container.EnqueueOnPluginGoRoutine(
-		func() {
-			resultCh <- p.getEntities()
-			close(resultCh)
-		})
-	var items []any = nil
-	if err == nil {
-		items = <-resultCh
-	} else {
-		fmt.Printf("%T handleHttpListRequest: Error retrieving entities: %s\n", *p, err)
-		items = make([]any, 0)
-	}
-
-	// Second, we want to pass a list of pointers to the entities we received to avoid
-	// copying, so convert the entity list to a list of pointers to the entities.
-	itemRefs := make([]any, len(items))
-
-	for i := 0; i < len(items); i = i + 1 {
-		switch typedItem := items[i].(type) {
-		case thermometer.Thermometer:
-			itemRefs[i] = &typedItem
-		case thermometer.WirelessThermometer:
-			// This is the type-specific way to get a pointer to a struct.  It should be faster
-			// than the reflection-based approach below.
-			itemRefs[i] = &typedItem
-		case thermometer.Thermostat:
-			itemRefs[i] = &typedItem
-		default:
-			itemType := reflect.TypeOf(typedItem)
-			itemTypeKind := itemType.Kind()
-			switch itemTypeKind {
-			case reflect.Struct:
-				// This is a generic way to construct a pointer to struct
-				//fmt.Printf("items[%v] kind: %v\n", i, itemTypeKind)
-				typedItemPointer := reflect.New(itemType)
-				typedItemPointer.Elem().Set(reflect.ValueOf(typedItem))
-				itemRefs[i] = typedItemPointer.Interface()
-			case reflect.Interface, reflect.Pointer:
-				// Interfaces and pointers are already references and don't need any conversion.
-				//fmt.Printf("items[%v] kind: %v\n", i, itemTypeKind)
-				itemRefs[i] = typedItem
-			}
-		}
-	}
-
-	// Third, sort the entities using their sort keys
-	sort.Slice(
-		itemRefs,
-		func(i int, j int) bool {
-			leftValue, leftOk := itemRefs[i].(common.ISortable)
-
-			if leftOk {
-				rightValue, rightOk := itemRefs[j].(common.ISortable)
-
-				if rightOk {
-					//fmt.Printf("Comparing %s < %s: %v\n",
-					//	leftValue.GetSortKey(), rightValue.GetSortKey(), leftValue.GetSortKey() < rightValue.GetSortKey())
-					return leftValue.GetSortKey() < rightValue.GetSortKey()
-				}
-			} else {
-				//fmt.Printf("Unable to cast %T (%v) to ISortable\n", itemRefs[i], itemRefs[i])
-			}
-			return true
-		})
-
-	// Lastly, render the sorted entity list.  The render plugin will choose a matching rendered based on
-	// the entity type.
-	p.state.container.RenderList(w, r, listRenderOptions, itemRefs)
 }
 
 func (p *plugin) getEntities() []any {
@@ -469,125 +353,7 @@ func (p *plugin) onEntityStateChanged(eventInfo *events.EventInfo) error {
 	return err
 }
 
-func (p *plugin) wirelessThermometerRendererFactory() (spi.EntityRenderer, error) {
-	// Load the template
-	t, err := p.state.container.GetTemplate(&WirelessThermometerTemplate)
-
-	if err != nil {
-		return spi.EntityRenderer{}, fmt.Errorf("unable to load wireless_thermometer template: %v", err)
-	}
-
-	// Declare a function that casts the entity to the expected type and evaluates it via the template loaded above
-	renderer := func(w io.Writer, entity any) error {
-		wt, ok := entity.(*thermometer.WirelessThermometer)
-
-		if !ok {
-			return errors.New("item is not an instance of *WirelessThermometer")
-		}
-
-		err := t.Instance.Execute(w, wt)
-
-		if err != nil {
-			return fmt.Errorf("unable to execute wireless_thermometer template: %w", err)
-		}
-
-		return nil
-	}
-
-	return spi.EntityRenderer{StreamingRenderFunc: renderer, Styles: t.Styles, Scripts: t.Scripts}, nil
-}
-
-func (p *plugin) thermostatRendererFactory() (spi.EntityRenderer, error) {
-	// Load the template
-	compiledTemplate, err := p.state.container.GetTemplate(&ThermostatTemplate)
-
-	if err != nil {
-		return spi.EntityRenderer{}, fmt.Errorf("unable to load thermostat template: %v", err)
-	}
-
-	// Declare a function that casts the entity to the expected type and evaluates it via the template loaded above
-	renderer := func(w io.Writer, entity any) error {
-		thermostatEntity, ok := entity.(*thermometer.Thermostat)
-
-		if !ok {
-			return errors.New("item is not an instance of *Thermostat")
-		}
-
-		err := compiledTemplate.Instance.Execute(w, thermostatEntity)
-
-		if err != nil {
-			return fmt.Errorf("unable to execute thermostat template: %w", err)
-		}
-
-		return nil
-	}
-
-	return spi.EntityRenderer{StreamingRenderFunc: renderer, Styles: compiledTemplate.Styles, Scripts: compiledTemplate.Scripts}, nil
-}
-
 func isCompatibleEntityType(entityType reflect.Type) bool {
 	result := entityType.AssignableTo(IWirelessThermometerType) || entityType.AssignableTo(IThermostatType)
-	//fmt.Printf("Checking entityType %v, result: %v\n", entityType, result)
 	return result
-}
-
-func CelsiusToFahrenheit(celsiusValue float32) float32 {
-	return celsiusValue*float32(9)/float32(5) + float32(32)
-}
-
-func IsOffline(connectivity environmental.Connectivity) bool {
-	return connectivity == environmental.ConnectivityOffline
-}
-
-func IsOnline(connectivity environmental.Connectivity) bool {
-	return connectivity == environmental.ConnectivityOnline
-}
-
-// FormatConnectivityTime formats an OfflineSince/OnlineSince timestamp for display, distinguishing a
-// state that's genuinely never been observed (zero time.Time) from a real timestamp — text/template has
-// no way to test IsZero on its own.
-func FormatConnectivityTime(timeValue time.Time) string {
-	if timeValue.IsZero() {
-		return "Unknown"
-	}
-
-	return timeValue.Format("2006-01-02 3:04:05 PM")
-}
-
-// staleThreshold is how long a wireless thermometer can go without a sensor
-// update before it's considered stale (e.g. the device went offline).
-const staleThreshold = time.Hour
-
-func IsStale(timeValue time.Time) bool {
-	return !timeValue.IsZero() && time.Since(timeValue) > staleThreshold
-}
-
-// lowBatteryThreshold is the battery percentage below which a wireless thermometer's
-// battery icon is flagged as low.
-const lowBatteryThreshold = 10
-
-func IsLowBattery(level int) bool {
-	return level < lowBatteryThreshold
-}
-
-func RelativeTime(timeValue time.Time) string {
-	elapsed := time.Since(timeValue).Truncate(time.Second)
-
-	if elapsed.Seconds() < 30 {
-		return "< 30s"
-	}
-
-	if elapsed.Seconds() < 60 {
-		return "< 1m"
-	}
-
-	elapsed = elapsed.Truncate(time.Minute)
-
-	if elapsed.Minutes() < 60 {
-		return fmt.Sprintf("%vm", elapsed.Minutes())
-	}
-
-	elapsed = elapsed.Truncate(time.Hour)
-
-	return fmt.Sprintf("%vh", elapsed.Hours())
 }
