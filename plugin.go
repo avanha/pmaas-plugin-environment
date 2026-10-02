@@ -12,6 +12,7 @@ import (
 	"github.com/avanha/pmaas-plugin-environment/internal/common"
 	httphandler "github.com/avanha/pmaas-plugin-environment/internal/http"
 	"github.com/avanha/pmaas-plugin-environment/internal/thermometer"
+	"github.com/avanha/pmaas-spi/entity"
 	environmental "github.com/avanha/pmaas-spi/environment"
 	"github.com/avanha/pmaas-spi/events"
 	"github.com/avanha/pmaas-spi/tracking"
@@ -79,10 +80,10 @@ func (p *plugin) Init(container spi.IPMAASContainer) {
 func (p *plugin) Start() {
 	fmt.Printf("%T Starting...\n", *p)
 
+	// Handlers first, then the scan: an entity registered between the two is seen by both, which
+	// processEntity tolerates, whereas the reverse order could miss it entirely.
 	p.registerEventHandlers()
-	// TODO: Retrieve the list of possible entities to add to our map.
-	// Without it, we depend on the plugin ordering to ensure we get any devices in existence prior to our registration.
-
+	p.scanCurrentEntities()
 	p.startNetDiscovery()
 }
 
@@ -250,6 +251,23 @@ func (p *plugin) getEntities() []any {
 	return entityList
 }
 
+// scanCurrentEntities picks up compatible entities that were registered before this plugin
+// started, which no registration event will ever be delivered for.
+func (p *plugin) scanCurrentEntities() {
+	registered, err := p.state.container.GetEntities(
+		func(info *entity.RegisteredEntityInfo) bool {
+			return isCompatibleEntityType(info.EntityType)
+		})
+	if err != nil {
+		fmt.Printf("%T scanCurrentEntities: unable to scan registered entities: %v\n", *p, err)
+		return
+	}
+
+	for _, e := range registered {
+		p.processEntity(e.Id, e.EntityType, e.Name, e.StubFactoryFn)
+	}
+}
+
 func (p *plugin) onEntityRegistered(eventInfo *events.EventInfo) error {
 	if p.state.stopped {
 		return nil
@@ -257,25 +275,81 @@ func (p *plugin) onEntityRegistered(eventInfo *events.EventInfo) error {
 
 	fmt.Printf("%T onEntityRegistered(%v)\n", *p, eventInfo)
 	event := eventInfo.Event.(events.EntityRegisteredEvent)
-	_, ok := p.state.entities[event.Id]
+	p.processEntity(event.Id, event.EntityType, event.Name, event.StubFactoryFn)
 
-	if ok {
-		return fmt.Errorf("Entity %s already tracked", event.Id)
+	return nil
+}
+
+// processEntity starts tracking a source entity, whether it was learned from a registration event
+// or from the startup scan. Already-tracked entities are ignored, since the same entity can
+// legitimately arrive via both. sourceStubFactory is the producer's stub factory, nil for a producer
+// that doesn't publish a stub (e.g. bluetooth today).
+func (p *plugin) processEntity(
+	id string, entityType reflect.Type, name string, sourceStubFactory func() (any, error)) {
+	if _, ok := p.state.entities[id]; ok {
+		return
 	}
 
 	// A remote-mirrored shadow of this exact device may already exist (announced by a peer
 	// before this node's own local copy got registered) - remove it now that a local,
 	// authoritative copy is arriving, so the local one always wins over a mirrored one
 	// regardless of which arrived first.
-	p.removeRemoteShadowsOf(event.Id)
+	p.removeRemoteShadowsOf(id)
 
-	if event.EntityType.AssignableTo(IThermostatType) {
-		p.registerThermostat(event)
+	var tracked common.IStateTracker
+
+	if entityType.AssignableTo(IThermostatType) {
+		tracked = p.registerThermostat(id, name)
 	} else {
-		p.registerWirelessThermometer(event)
+		tracked = p.registerWirelessThermometer(id, name)
 	}
 
-	return nil
+	if tracked != nil {
+		p.loadInitialState(id, tracked, sourceStubFactory)
+	}
+}
+
+// loadInitialState seeds a newly tracked entity from its source's current state, so an entity
+// registered before this plugin started doesn't show no data until the source's next state change.
+// Needs the producer to publish a stub implementing the environment interface; one that doesn't
+// (nil factory) is simply skipped and the entity waits for its first state change event. The source
+// stub is owned by the producer and must not be closed here.
+//
+// This blocks on the producer's goroutine twice (stub factory, then the state read), so it must not
+// be called from anything the producer could be waiting on.
+func (p *plugin) loadInitialState(id string, tracked common.IStateTracker, sourceStubFactory func() (any, error)) {
+	if sourceStubFactory == nil {
+		return
+	}
+
+	sourceStub, err := sourceStubFactory()
+	if err != nil {
+		fmt.Printf("%T loadInitialState: unable to create stub for %s: %v\n", *p, id, err)
+		return
+	}
+
+	var initialState any
+
+	switch typedStub := sourceStub.(type) {
+	case environmental.IThermostat:
+		initialState = typedStub.GetThermostatData()
+	case environmental.IWirelessThermometer:
+		initialState = typedStub.GetWirelessThermometerData()
+	default:
+		return
+	}
+
+	if err := p.applyState(tracked, initialState); err != nil {
+		fmt.Printf("%T loadInitialState: unable to apply initial state for %s: %v\n", *p, id, err)
+	}
+}
+
+func (p *plugin) applyState(tracked common.IStateTracker, newState any) error {
+	return tracked.ProcessNewState(newState, func(pmaasEntityId string, event any) {
+		if err := p.state.container.BroadcastEvent(pmaasEntityId, event); err != nil {
+			fmt.Printf("%T Error broadcasting event %v: %v\n", *p, event, err)
+		}
+	})
 }
 
 // buildTrackingConfig builds the tracking.Config shared by every re-hosted entity kind: unnamed
@@ -300,12 +374,13 @@ func buildTrackingConfig(
 	}
 }
 
-func (p *plugin) registerWirelessThermometer(event events.EntityRegisteredEvent) {
+// registerWirelessThermometer returns nil if the entity couldn't be registered with the container.
+func (p *plugin) registerWirelessThermometer(id string, name string) common.IStateTracker {
 	trackingConfig := buildTrackingConfig(
-		"WirelessThermometer", event.Name, data.WirelessThermometerDataType, data.WirelessThermometerDataToInsertArgs)
+		"WirelessThermometer", name, data.WirelessThermometerDataType, data.WirelessThermometerDataToInsertArgs)
 
 	instance := thermometer.CreateWirelessThermometer(
-		p.state.nextEntityId(), event.Id, event.Name, entities.WirelessThermometerType, trackingConfig)
+		p.state.nextEntityId(), id, name, entities.WirelessThermometerType, trackingConfig)
 
 	// This lambda captures both the plugin instance and the thermometer instance
 	// and passes it to the entity manager.  However, since entities are deregistered on plugin
@@ -323,20 +398,23 @@ func (p *plugin) registerWirelessThermometer(event events.EntityRegisteredEvent)
 		// Don't track an entity the container doesn't know about: it would have no PmaasEntityId,
 		// so any event published for it would carry an empty id.
 		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
-		return
+		return nil
 	}
 
 	instance.PmaasEntityId = pmaasEntityId
-	p.state.entities[event.Id] = instance
-	p.notifyEntityChanged(event.Id)
+	p.state.entities[id] = instance
+	p.notifyEntityChanged(id)
+
+	return instance
 }
 
-func (p *plugin) registerThermostat(event events.EntityRegisteredEvent) {
+// registerThermostat returns nil if the entity couldn't be registered with the container.
+func (p *plugin) registerThermostat(id string, name string) common.IStateTracker {
 	trackingConfig := buildTrackingConfig(
-		"Thermostat", event.Name, data.ThermostatDataType, data.ThermostatDataToInsertArgs)
+		"Thermostat", name, data.ThermostatDataType, data.ThermostatDataToInsertArgs)
 
 	instance := thermometer.CreateThermostat(
-		p.state.nextEntityId(), event.Id, event.Name, entities.ThermostatType, trackingConfig)
+		p.state.nextEntityId(), id, name, entities.ThermostatType, trackingConfig)
 
 	var stubFactoryFn spi.EntityStubFactoryFunc = func() (any, error) {
 		return instance.GetStub(p.state.container), nil
@@ -350,12 +428,14 @@ func (p *plugin) registerThermostat(event events.EntityRegisteredEvent) {
 	if err != nil {
 		// See registerWirelessThermometer.
 		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
-		return
+		return nil
 	}
 
 	instance.PmaasEntityId = pmaasEntityId
-	p.state.entities[event.Id] = instance
-	p.notifyEntityChanged(event.Id)
+	p.state.entities[id] = instance
+	p.notifyEntityChanged(id)
+
+	return instance
 }
 
 func buildTrackingName(prefix string, name string) string {
@@ -376,12 +456,7 @@ func (p *plugin) onEntityStateChanged(eventInfo *events.EventInfo) error {
 		return fmt.Errorf("Entity %s is not tracked", event.Id)
 	}
 
-	err := entity.ProcessNewState(event.NewState, func(pmassEntityId string, event any) {
-		err := p.state.container.BroadcastEvent(pmassEntityId, event)
-		if err != nil {
-			fmt.Printf("%T Error broadcasting event %v", p, event)
-		}
-	})
+	err := p.applyState(entity, event.NewState)
 
 	p.notifyEntityChanged(sourceEntityId)
 
