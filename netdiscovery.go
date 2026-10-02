@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/avanha/pmaas-common/mailbox"
@@ -31,7 +32,7 @@ const (
 
 // netDiscoveryAnnounceInterval is both how often an EnableAnnounce node re-announces its full
 // entity set (a heartbeat, on top of the change-triggered announces already sent via
-// NotifyEntityChanged), and how often an EnableDiscover node sweeps for entities it hasn't heard
+// EntityChanged), and how often an EnableDiscover node sweeps for entities it hasn't heard
 // about in netDiscoveryEntityTTL - see runTicker.
 const netDiscoveryAnnounceInterval = 30 * time.Minute
 
@@ -61,24 +62,12 @@ type RemoteEntityRef struct {
 	RawId  string
 }
 
-// remoteEntitySink is how netDiscovery reaches back for the handful of things only the plugin
-// can decide - anything that touches the plugin's own entity map. netDiscovery never touches
-// plugin state directly; the plugin implements this and is responsible for hopping onto its own
-// goroutine inside each method (see plugin.Snapshot/ApplyRemoteAnnouncement/etc. in
-// remoteentities.go).
+// remoteEntitySink is how netDiscovery reaches back for the things only the plugin can decide -
+// anything that touches the plugin's own entity map. Every method is invoked on the plugin's own
+// goroutine (netDiscovery delivers each call through toPlugin, never directly from its own
+// goroutine), so implementations touch plugin state freely and must not hop goroutines
+// themselves. netDiscovery never waits for the result.
 type remoteEntitySink interface {
-	// Snapshot returns this node's own, locally-sourced entities (never a remote-mirrored
-	// shadow) as portable data, for building an outgoing Announce - used for the periodic
-	// heartbeat and for answering a peer's Query.
-	Snapshot() []EntitySnapshot
-
-	// SnapshotOne returns the single locally-sourced entity identified by rawId, as portable
-	// data - used for a change-triggered announce (see NotifyEntityChanged/announceOne), so a
-	// single state change doesn't require re-encoding and re-sending every other entity this
-	// node knows about. false if rawId isn't a current, locally-sourced entity (already removed,
-	// or itself a remote-mirrored shadow).
-	SnapshotOne(rawId string) (EntitySnapshot, bool)
-
 	// ApplyRemoteAnnouncement mirrors one already-decoded entity announced by sender into the
 	// plugin's own entity map, creating it on first sight and updating it thereafter.
 	ApplyRemoteAnnouncement(sender discovery.InstanceID, kind, rawId, name string, decodedState any, asOf time.Time) error
@@ -133,6 +122,21 @@ type netDiscovery struct {
 
 	tickerStopCh chan struct{}
 
+	// localEntities is netDiscovery's own copy of this node's locally-sourced entities, kept current
+	// by the plugin pushing changes in (EntityChanged/EntityRemoved) rather than netDiscovery
+	// calling back to ask. That's what keeps netDiscovery from ever blocking on the plugin
+	// goroutine - see outbox. Only ever touched on the mailbox goroutine.
+	localEntities map[string]EntitySnapshot
+
+	// fromPlugin carries closures from the plugin goroutine onto netDiscovery's mailbox goroutine;
+	// toPlugin carries them the other way. Both are non-blocking for the sender.
+	fromPlugin *outbox
+	toPlugin   *outbox
+
+	// loops tracks runEventLoop and runTicker, so Stop can wait for them.
+	loops    sync.WaitGroup
+	stopOnce sync.Once
+
 	// startupQueryTimer is the pending delayed initial Query, nil unless EnableDiscover.
 	startupQueryTimer *time.Timer
 }
@@ -154,7 +158,14 @@ type netDiscovery struct {
 //   - receive is needed whenever EnableDiscover is set (to see peers' Announce), but *also*
 //     whenever EnableAnnounce is set on its own (to see incoming Query requests to answer -
 //     an announce-only node still needs to listen for the thing it's responding to).
-func newNetDiscovery(instanceID discovery.InstanceID, config NetDiscoveryConfig, sink remoteEntitySink) (*netDiscovery, error) {
+//
+// runOnPlugin enqueues a function on the plugin's own goroutine - it may block until that goroutine
+// is free, which is why it's only ever called from toPlugin's delivery goroutine.
+func newNetDiscovery(
+	instanceID discovery.InstanceID,
+	config NetDiscoveryConfig,
+	sink remoteEntitySink,
+	runOnPlugin func(func()) error) (*netDiscovery, error) {
 	if !config.EnableAnnounce && !config.EnableDiscover {
 		return nil, nil
 	}
@@ -178,11 +189,15 @@ func newNetDiscovery(instanceID discovery.InstanceID, config NetDiscoveryConfig,
 		discoverEnabled: config.EnableDiscover,
 		mailbox:         mailbox.NewMailbox(),
 		remoteMeta:      make(map[discovery.InstanceID]map[string]*remoteEntityMeta),
+		localEntities:   make(map[string]EntitySnapshot),
 		tickerStopCh:    make(chan struct{}),
 	}
 
-	go nd.runEventLoop()
-	go nd.runTicker()
+	nd.fromPlugin = newOutbox("fromPlugin", nd.mailbox.Send)
+	nd.toPlugin = newOutbox("toPlugin", runOnPlugin)
+
+	nd.loops.Go(nd.runEventLoop)
+	nd.loops.Go(nd.runTicker)
 
 	if config.EnableDiscover {
 		// "Anyone here with thermometers?" - ask once at startup so entities from peers that
@@ -213,10 +228,16 @@ func randomDelayIn(minDelay, maxDelay time.Duration) time.Duration {
 	return minDelay + time.Duration(rand.Int64N(int64(maxDelay-minDelay)))
 }
 
-// Stop tears this actor down: stops the ticker, sends Goodbye if announcing, closes the
-// transport/service (which also lets runEventLoop exit, once Events() closes), then stops the
-// mailbox.
+// Stop tears this actor down and blocks until it's completely finished, so it must NOT be called
+// on the plugin goroutine: the toPlugin outbox needs that goroutine free to drain. Sequence: stop
+// the ticker, send Goodbye if announcing, close the transport/service and wait for the loops that
+// feed the mailbox, drain what the plugin already posted, stop the mailbox, then drain what
+// netDiscovery already posted back to the plugin. Safe to call more than once.
 func (nd *netDiscovery) Stop() {
+	nd.stopOnce.Do(nd.stop)
+}
+
+func (nd *netDiscovery) stop() {
 	close(nd.tickerStopCh)
 
 	if nd.startupQueryTimer != nil {
@@ -233,31 +254,68 @@ func (nd *netDiscovery) Stop() {
 		fmt.Printf("netDiscovery: error closing discovery service: %v\n", err)
 	}
 
+	nd.loops.Wait()
+	nd.fromPlugin.Stop()
 	nd.mailbox.Stop()
+	nd.toPlugin.Stop()
 }
 
-// NotifyEntityChanged tells netDiscovery that the entity identified by rawId changed, so it
-// re-announces just that entity promptly instead of waiting for the next heartbeat - see
-// announceOne. Safe to call any time, including after Stop (the enqueue just fails and is
-// logged).
-func (nd *netDiscovery) NotifyEntityChanged(rawId string) {
-	if err := nd.mailbox.Send(func() { nd.announceOne(rawId) }); err != nil {
-		fmt.Printf("netDiscovery: unable to enqueue change-triggered announce for %s: %v\n", rawId, err)
+// EntityChanged tells netDiscovery the current state of one of this node's locally-sourced
+// entities - on registration and on every state change. It records the snapshot for future
+// heartbeats and query responses, and announces just that entity promptly instead of waiting for
+// the next heartbeat. Never blocks. Safe to call any time, including after Stop (the post just
+// fails and is logged).
+func (nd *netDiscovery) EntityChanged(snapshot EntitySnapshot) {
+	err := nd.fromPlugin.Post(func() {
+		nd.localEntities[snapshot.RawId] = snapshot
+		nd.announceOne(snapshot)
+	})
+	if err != nil {
+		fmt.Printf("netDiscovery: unable to post change for %s: %v\n", snapshot.RawId, err)
 	}
 }
 
-// ForgetRawId drops any liveness bookkeeping for rawId across every sender. Called when a local
-// entity for the same raw id is about to be registered, so that if the local copy is ever later
-// removed, a shadow reappearing for it starts from a clean TTL rather than inheriting a stale
-// lastSeen from before the local copy existed.
-func (nd *netDiscovery) ForgetRawId(rawId string) {
-	err := nd.mailbox.Send(func() {
-		for _, bySender := range nd.remoteMeta {
-			delete(bySender, rawId)
+// Seed records entities that were already tracked before netDiscovery started, without announcing
+// them individually. Never blocks.
+func (nd *netDiscovery) Seed(snapshots []EntitySnapshot) {
+	err := nd.fromPlugin.Post(func() {
+		for _, snapshot := range snapshots {
+			nd.localEntities[snapshot.RawId] = snapshot
 		}
 	})
 	if err != nil {
-		fmt.Printf("netDiscovery: unable to enqueue forgetting %s: %v\n", rawId, err)
+		fmt.Printf("netDiscovery: unable to post seed: %v\n", err)
+	}
+}
+
+// EntityRemoved tells netDiscovery that a locally-sourced entity no longer exists, so heartbeats
+// and query responses stop advertising it. The protocol has no per-entity removal message, so
+// peers drop their mirrored copy when it ages out (netDiscoveryEntityTTL). Also forgets any
+// liveness bookkeeping for the raw id across every sender, so if a mirrored shadow of it ever
+// reappears it starts from a clean TTL rather than a stale lastSeen. Never blocks.
+func (nd *netDiscovery) EntityRemoved(rawId string) {
+	err := nd.fromPlugin.Post(func() {
+		delete(nd.localEntities, rawId)
+		nd.forgetRawId(rawId)
+	})
+	if err != nil {
+		fmt.Printf("netDiscovery: unable to post removal of %s: %v\n", rawId, err)
+	}
+}
+
+// ForgetRawId drops liveness bookkeeping for rawId across every sender, without touching the
+// local entity set. Called when a local entity for the same raw id is about to be registered, so
+// that if the local copy is ever later removed, a shadow reappearing for it starts from a clean
+// TTL. Never blocks.
+func (nd *netDiscovery) ForgetRawId(rawId string) {
+	if err := nd.fromPlugin.Post(func() { nd.forgetRawId(rawId) }); err != nil {
+		fmt.Printf("netDiscovery: unable to post forgetting %s: %v\n", rawId, err)
+	}
+}
+
+func (nd *netDiscovery) forgetRawId(rawId string) {
+	for _, bySender := range nd.remoteMeta {
+		delete(bySender, rawId)
 	}
 }
 
@@ -331,9 +389,8 @@ func (nd *netDiscovery) handleQuery(event discovery.Event) {
 	})
 }
 
-// announceNow asks the sink for all of the plugin's current entities and sends them as one
-// Announce - the periodic heartbeat (onTick) and a query response (handleQuery), since both send
-// the full set.
+// announceNow sends every locally-sourced entity as one Announce - the periodic heartbeat (onTick)
+// and a query response (handleQuery), since both send the full set.
 func (nd *netDiscovery) announceNow() {
 	if !nd.announceEnabled {
 		return
@@ -345,10 +402,9 @@ func (nd *netDiscovery) announceNow() {
 }
 
 func (nd *netDiscovery) buildEntityAnnouncements() []discovery.EntityAnnouncement {
-	snapshot := nd.sink.Snapshot()
-	announcements := make([]discovery.EntityAnnouncement, 0, len(snapshot))
+	announcements := make([]discovery.EntityAnnouncement, 0, len(nd.localEntities))
 
-	for _, entity := range snapshot {
+	for _, entity := range nd.localEntities {
 		announcement, err := encodeAnnouncement(entity)
 		if err != nil {
 			fmt.Printf("netDiscovery: unable to encode state for %s: %v\n", entity.RawId, err)
@@ -361,28 +417,22 @@ func (nd *netDiscovery) buildEntityAnnouncements() []discovery.EntityAnnouncemen
 	return announcements
 }
 
-// announceOne asks the sink for exactly one entity's current state and sends it alone as a
-// single-element Announce - the change-triggered counterpart to announceNow's full heartbeat, so
-// one state change doesn't require re-encoding and re-sending every other entity this node
-// knows about.
-func (nd *netDiscovery) announceOne(rawId string) {
+// announceOne sends exactly one entity as a single-element Announce - the change-triggered
+// counterpart to announceNow's full heartbeat, so one state change doesn't require re-encoding and
+// re-sending every other entity this node knows about.
+func (nd *netDiscovery) announceOne(snapshot EntitySnapshot) {
 	if !nd.announceEnabled {
-		return
-	}
-
-	snapshot, ok := nd.sink.SnapshotOne(rawId)
-	if !ok {
 		return
 	}
 
 	announcement, err := encodeAnnouncement(snapshot)
 	if err != nil {
-		fmt.Printf("netDiscovery: unable to encode state for %s: %v\n", rawId, err)
+		fmt.Printf("netDiscovery: unable to encode state for %s: %v\n", snapshot.RawId, err)
 		return
 	}
 
 	if err := nd.service.SendAnnounce([]discovery.EntityAnnouncement{announcement}); err != nil {
-		fmt.Printf("netDiscovery: unable to announce %s: %v\n", rawId, err)
+		fmt.Printf("netDiscovery: unable to announce %s: %v\n", snapshot.RawId, err)
 	}
 }
 
@@ -446,12 +496,14 @@ func (nd *netDiscovery) applyAnnouncement(event discovery.Event, announcement di
 		meta.lastAsOf = announcement.AsOf
 	}
 
-	err = nd.sink.ApplyRemoteAnnouncement(
-		event.Sender, announcement.EntityKind, announcement.EntityId, announcement.Name, decodedState, announcement.AsOf)
-	if err != nil {
-		fmt.Printf("netDiscovery: unable to apply %s %q from %s: %v\n",
-			announcement.EntityKind, announcement.EntityId, event.Sender, err)
-	}
+	nd.postToPlugin(func() {
+		err := nd.sink.ApplyRemoteAnnouncement(
+			event.Sender, announcement.EntityKind, announcement.EntityId, announcement.Name, decodedState, announcement.AsOf)
+		if err != nil {
+			fmt.Printf("netDiscovery: unable to apply %s %q from %s: %v\n",
+				announcement.EntityKind, announcement.EntityId, event.Sender, err)
+		}
+	})
 }
 
 // touch records that rawId from sender was just heard from, creating its bookkeeping on first
@@ -505,9 +557,11 @@ func (nd *netDiscovery) handleGoodbye(event discovery.Event) {
 
 	delete(nd.remoteMeta, event.Sender)
 
-	if err := nd.sink.RemoveRemoteEntitiesFromSender(event.Sender); err != nil {
-		fmt.Printf("netDiscovery: unable to remove entities from %s: %v\n", event.Sender, err)
-	}
+	nd.postToPlugin(func() {
+		if err := nd.sink.RemoveRemoteEntitiesFromSender(event.Sender); err != nil {
+			fmt.Printf("netDiscovery: unable to remove entities from %s: %v\n", event.Sender, err)
+		}
+	})
 }
 
 // sweepStale drops any mirrored entity not mentioned in an Announce for at least
@@ -536,8 +590,17 @@ func (nd *netDiscovery) sweepStale() {
 
 	fmt.Printf("netDiscovery: %d entities not seen since %s, removing\n", len(stale), cutoff)
 
-	if err := nd.sink.RemoveStaleRemoteEntities(stale); err != nil {
-		fmt.Printf("netDiscovery: unable to remove stale entities: %v\n", err)
+	nd.postToPlugin(func() {
+		if err := nd.sink.RemoveStaleRemoteEntities(stale); err != nil {
+			fmt.Printf("netDiscovery: unable to remove stale entities: %v\n", err)
+		}
+	})
+}
+
+// postToPlugin queues f to run on the plugin's goroutine, in order with everything else posted.
+func (nd *netDiscovery) postToPlugin(f func()) {
+	if err := nd.toPlugin.Post(f); err != nil {
+		fmt.Printf("netDiscovery: unable to post to plugin: %v\n", err)
 	}
 }
 

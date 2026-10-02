@@ -28,23 +28,12 @@ const remoteEntityIdPrefix = "net:"
 // another device's raw id.
 const senderIdHexLength = 32
 
-// Snapshot implements remoteEntitySink. Reads p.state.entities, so it has to run on the plugin's
-// own goroutine - see spi.Exec.
-func (p *plugin) Snapshot() []EntitySnapshot {
-	result, err := spi.Exec(p.state.container, p.buildEntitySnapshots)
-	if err != nil {
-		fmt.Printf("%T Snapshot: unable to read entities: %v\n", *p, err)
-		return nil
-	}
-	return result
-}
-
 // buildEntitySnapshots converts this node's own entities into netDiscovery's portable shape,
 // skipping any entity that was itself mirrored in from another peer (isRemoteEntityId) - relaying
 // a peer's entities back out under our own announcement would let a third node see two different
 // apparent owners for the same entity depending on which of us it happened to hear from first,
 // and that peer is already the authoritative announcer for it regardless. Must run on the
-// plugin's own goroutine - see Snapshot.
+// plugin's own goroutine.
 func (p *plugin) buildEntitySnapshots() []EntitySnapshot {
 	snapshots := make([]EntitySnapshot, 0, len(p.state.entities))
 
@@ -57,40 +46,6 @@ func (p *plugin) buildEntitySnapshots() []EntitySnapshot {
 	}
 
 	return snapshots
-}
-
-type entityLookupResult struct {
-	snapshot EntitySnapshot
-	found    bool
-}
-
-// SnapshotOne implements remoteEntitySink. Reads p.state.entities, so it has to run on the
-// plugin's own goroutine - see spi.Exec.
-func (p *plugin) SnapshotOne(rawId string) (EntitySnapshot, bool) {
-	result, err := spi.Exec(p.state.container, func() entityLookupResult {
-		snapshot, found := p.buildEntitySnapshotFor(rawId)
-		return entityLookupResult{snapshot: snapshot, found: found}
-	})
-	if err != nil {
-		fmt.Printf("%T SnapshotOne: unable to read entity %s: %v\n", *p, rawId, err)
-		return EntitySnapshot{}, false
-	}
-	return result.snapshot, result.found
-}
-
-// buildEntitySnapshotFor is SnapshotOne's single-entity counterpart to buildEntitySnapshots - see
-// its doc for the isRemoteEntityId skip. Must run on the plugin's own goroutine - see SnapshotOne.
-func (p *plugin) buildEntitySnapshotFor(rawId string) (EntitySnapshot, bool) {
-	if isRemoteEntityId(rawId) {
-		return EntitySnapshot{}, false
-	}
-
-	tracked, ok := p.state.entities[rawId]
-	if !ok {
-		return EntitySnapshot{}, false
-	}
-
-	return entitySnapshotFor(rawId, tracked), true
 }
 
 // entitySnapshotFor converts a single tracked entity into netDiscovery's portable shape.
@@ -106,19 +61,11 @@ func entitySnapshotFor(id string, tracked common.IStateTracker) EntitySnapshot {
 	}
 }
 
-// ApplyRemoteAnnouncement implements remoteEntitySink.
+// ApplyRemoteAnnouncement implements remoteEntitySink. Runs on the plugin's own goroutine.
 func (p *plugin) ApplyRemoteAnnouncement(
-	sender discovery.InstanceID, kind, rawId, name string, decodedState any, asOf time.Time) error {
-	return p.state.container.EnqueueOnPluginGoRoutine(func() {
-		p.applyRemoteAnnouncement(sender, kind, rawId, name, decodedState)
-	})
-}
-
-// applyRemoteAnnouncement does the actual entity-map mutation - must run on the plugin's own
-// goroutine (see ApplyRemoteAnnouncement).
-func (p *plugin) applyRemoteAnnouncement(sender discovery.InstanceID, kind, rawId, name string, decodedState any) {
+	sender discovery.InstanceID, kind, rawId, name string, decodedState any, _ time.Time) error {
 	if p.state.stopped {
-		return
+		return nil
 	}
 
 	id := remoteEntityId(sender, rawId)
@@ -139,9 +86,9 @@ func (p *plugin) applyRemoteAnnouncement(sender discovery.InstanceID, kind, rawI
 		// own local copy existed, or before this check existed), remove it now rather than
 		// leaving a stale duplicate sitting around indefinitely.
 		if _, staleShadowExists := p.state.entities[id]; staleShadowExists {
-			p.removeRemoteEntity(id)
+			p.removeEntity(id)
 		}
-		return
+		return nil
 	}
 
 	tracked, exists := p.state.entities[id]
@@ -156,26 +103,18 @@ func (p *plugin) applyRemoteAnnouncement(sender discovery.InstanceID, kind, rawI
 				tracked = created
 			}
 		default:
-			fmt.Printf("%T applyRemoteAnnouncement: unknown entity kind %q for %s from %s\n", *p, kind, rawId, sender)
-			return
+			return fmt.Errorf("unknown entity kind %q for %s from %s", kind, rawId, sender)
 		}
 
 		if tracked == nil {
 			// Registration failed (already logged); don't track it.
-			return
+			return nil
 		}
 
 		p.state.entities[id] = tracked
 	}
 
-	err := tracked.ProcessNewState(decodedState, func(pmaasEntityId string, event any) {
-		if err := p.state.container.BroadcastEvent(pmaasEntityId, event); err != nil {
-			fmt.Printf("%T applyRemoteAnnouncement: error broadcasting event %v: %v\n", *p, event, err)
-		}
-	})
-	if err != nil {
-		fmt.Printf("%T applyRemoteAnnouncement: unable to apply %s %q from %s: %v\n", *p, kind, rawId, sender, err)
-	}
+	return p.applyState(tracked, decodedState)
 }
 
 // createRemoteWirelessThermometer returns nil if the entity couldn't be registered; a later Announce retries.
@@ -220,27 +159,27 @@ func (p *plugin) createRemoteThermostat(id string, name string) *thermometer.The
 	return instance
 }
 
-// RemoveRemoteEntitiesFromSender implements remoteEntitySink.
+// RemoveRemoteEntitiesFromSender implements remoteEntitySink. Runs on the plugin's own goroutine.
 func (p *plugin) RemoveRemoteEntitiesFromSender(sender discovery.InstanceID) error {
-	return p.state.container.EnqueueOnPluginGoRoutine(func() {
-		for _, id := range p.remoteEntityIdsForSender(sender) {
-			p.removeRemoteEntity(id)
-		}
-	})
+	for _, id := range p.remoteEntityIdsForSender(sender) {
+		p.removeEntity(id)
+	}
+
+	return nil
 }
 
-// RemoveStaleRemoteEntities implements remoteEntitySink.
+// RemoveStaleRemoteEntities implements remoteEntitySink. Runs on the plugin's own goroutine.
 func (p *plugin) RemoveStaleRemoteEntities(refs []RemoteEntityRef) error {
-	return p.state.container.EnqueueOnPluginGoRoutine(func() {
-		for _, ref := range refs {
-			p.removeRemoteEntity(remoteEntityId(ref.Sender, ref.RawId))
-		}
-	})
+	for _, ref := range refs {
+		p.removeEntity(remoteEntityId(ref.Sender, ref.RawId))
+	}
+
+	return nil
 }
 
-// removeRemoteEntity deregisters and forgets the tracked entity with the given map key. Despite
+// removeEntity deregisters and forgets the tracked entity with the given map key. Despite
 // the name it works for any tracked entity, local or mirrored - see deregisterAllEntities.
-func (p *plugin) removeRemoteEntity(id string) {
+func (p *plugin) removeEntity(id string) {
 	tracked, ok := p.state.entities[id]
 	if !ok {
 		return
@@ -248,7 +187,7 @@ func (p *plugin) removeRemoteEntity(id string) {
 
 	if pmaasEntityId := tracked.GetPmaasEntityId(); pmaasEntityId != "" {
 		if err := p.state.container.DeregisterEntity(pmaasEntityId); err != nil {
-			fmt.Printf("%T removeRemoteEntity: unable to deregister %s: %v\n", *p, id, err)
+			fmt.Printf("%T removeEntity: unable to deregister %s: %v\n", *p, id, err)
 		}
 	}
 
@@ -284,7 +223,7 @@ func (p *plugin) removeRemoteShadowsOf(rawId string) {
 	}
 
 	for _, id := range p.remoteEntityIdsForRawId(rawId) {
-		p.removeRemoteEntity(id)
+		p.removeEntity(id)
 	}
 
 	if p.state.netDiscovery != nil {

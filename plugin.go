@@ -89,6 +89,11 @@ func (p *plugin) Start() {
 	p.startNetDiscovery()
 }
 
+// Stop runs on the plugin goroutine, so it must not wait on anything that itself needs that
+// goroutine. Net discovery does (its outbound queue delivers onto it), so its shutdown happens on a
+// background goroutine and Stop returns the callback channel the core waits on, closing it once
+// that's finished. The plugin goroutine stays free to run what discovery still has queued
+// (which does nothing, see state.stopped) in the meantime.
 func (p *plugin) Stop() chan func() {
 	fmt.Printf("%T Stopping...\n", *p)
 
@@ -96,10 +101,23 @@ func (p *plugin) Stop() chan func() {
 
 	// Stop event delivery first so nothing new arrives while tearing down.
 	p.deregisterEventHandlers()
-	p.stopNetDiscovery()
 	p.deregisterAllEntities()
 
-	return p.state.container.ClosedCallbackChannel()
+	nd := p.state.netDiscovery
+	p.state.netDiscovery = nil
+
+	if nd == nil {
+		return p.state.container.ClosedCallbackChannel()
+	}
+
+	callbackCh := make(chan func())
+
+	go func() {
+		nd.Stop()
+		close(callbackCh)
+	}()
+
+	return callbackCh
 }
 
 func (p *plugin) deregisterEventHandlers() {
@@ -116,7 +134,7 @@ func (p *plugin) deregisterEventHandlers() {
 // and remote-mirrored alike.
 func (p *plugin) deregisterAllEntities() {
 	for id := range p.state.entities {
-		p.removeRemoteEntity(id)
+		p.removeEntity(id)
 	}
 }
 
@@ -139,7 +157,7 @@ func (p *plugin) startNetDiscovery() {
 		return
 	}
 
-	nd, err := newNetDiscovery(instanceID, netDiscoveryConfig, p)
+	nd, err := newNetDiscovery(instanceID, netDiscoveryConfig, p, p.state.container.EnqueueOnPluginGoRoutine)
 	if err != nil {
 		// Net discovery is an optional add-on to a plugin that's otherwise fully functional
 		// without it (local entities still work), so a misconfigured/unavailable network
@@ -149,15 +167,11 @@ func (p *plugin) startNetDiscovery() {
 	}
 
 	p.state.netDiscovery = nd
-}
 
-func (p *plugin) stopNetDiscovery() {
-	if p.state.netDiscovery == nil {
-		return
-	}
-
-	p.state.netDiscovery.Stop()
-	p.state.netDiscovery = nil
+	// Entities tracked before discovery came up (e.g. found by the startup scan) have already
+	// had their change notifications dropped, so hand them over now. Not announced individually:
+	// the first heartbeat or a peer's query will carry them.
+	nd.Seed(p.buildEntitySnapshots())
 }
 
 // loadOrCreateSenderId returns this installation's persisted net-discovery identity, creating
@@ -204,12 +218,16 @@ func (p *plugin) loadOrCreateSenderId() (discovery.InstanceID, error) {
 	return senderId, nil
 }
 
-// notifyEntityChanged tells netDiscovery (if running) that the entity identified by rawId
-// changed, so it re-announces just that entity promptly instead of waiting for its next
-// heartbeat.
+// notifyEntityChanged hands netDiscovery (if running) the current state of the locally-sourced
+// entity identified by rawId, so it announces it promptly and keeps it in its heartbeats. Runs on
+// the plugin goroutine, where the entity's state may be read directly.
 func (p *plugin) notifyEntityChanged(rawId string) {
-	if p.state.netDiscovery != nil {
-		p.state.netDiscovery.NotifyEntityChanged(rawId)
+	if p.state.netDiscovery == nil || isRemoteEntityId(rawId) {
+		return
+	}
+
+	if tracked, ok := p.state.entities[rawId]; ok {
+		p.state.netDiscovery.EntityChanged(entitySnapshotFor(rawId, tracked))
 	}
 }
 
@@ -255,6 +273,25 @@ func (p *plugin) registerEventHandlers() {
 	}
 
 	p.state.eventReceiverHandles["onEntityStateChange"] = handle
+
+	handle, err = p.state.container.RegisterEventReceiver(
+		func(eventInfo *events.EventInfo) bool {
+			entityDeregisteredEvent, ok := eventInfo.Event.(events.EntityDeregisteredEvent)
+
+			if !ok {
+				return false
+			}
+
+			return isCompatibleEntityType(entityDeregisteredEvent.EntityType)
+		},
+		p.onEntityDeregistered,
+	)
+
+	if err != nil {
+		panic(fmt.Sprintf("Unable to register for entity deregistration events: %v", err))
+	}
+
+	p.state.eventReceiverHandles["onEntityDeregistered"] = handle
 }
 
 func (p *plugin) getEntities() []any {
@@ -461,6 +498,29 @@ func buildTrackingName(prefix string, name string) string {
 	result = strings.ReplaceAll(result, "'", "")
 
 	return result
+}
+
+// onEntityDeregistered stops tracking a source entity that its producer removed (e.g. bluetooth
+// trimming a device), instead of leaving a stale copy rendering and announcing forever.
+func (p *plugin) onEntityDeregistered(eventInfo *events.EventInfo) error {
+	if p.state.stopped {
+		return nil
+	}
+
+	event := eventInfo.Event.(events.EntityDeregisteredEvent)
+
+	if _, ok := p.state.entities[event.Id]; !ok {
+		return nil
+	}
+
+	fmt.Printf("%T onEntityDeregistered(%v)\n", *p, eventInfo)
+	p.removeEntity(event.Id)
+
+	if p.state.netDiscovery != nil {
+		p.state.netDiscovery.EntityRemoved(event.Id)
+	}
+
+	return nil
 }
 
 func (p *plugin) onEntityStateChanged(eventInfo *events.EventInfo) error {
