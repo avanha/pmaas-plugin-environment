@@ -52,9 +52,9 @@ func newTestAnnouncement(t *testing.T, asOf time.Time) discovery.EntityAnnouncem
 func TestApplyAnnouncement_DropsOutOfOrder(t *testing.T) {
 	sink := &recordingSink{}
 	nd := &netDiscovery{
-		sink:       sink,
-		remoteMeta: make(map[discovery.InstanceID]map[string]*remoteEntityMeta),
-		toPlugin:   newOutbox("test", func(f func()) error { f(); return nil }),
+		sink:        sink,
+		remoteMeta:  make(map[discovery.InstanceID]map[string]*remoteEntityMeta),
+		runOnPlugin: func(f func()) error { f(); return nil },
 	}
 	event := discovery.Event{Sender: "peer"}
 	base := time.Now()
@@ -64,7 +64,6 @@ func TestApplyAnnouncement_DropsOutOfOrder(t *testing.T) {
 	nd.applyAnnouncement(event, newTestAnnouncement(t, base.Add(3*time.Second)))
 	nd.applyAnnouncement(event, newTestAnnouncement(t, time.Time{})) // peer without AsOf: always applied
 
-	nd.toPlugin.Stop()
 	applied := sink.appliedTimes()
 
 	if len(applied) != 3 {
@@ -137,10 +136,10 @@ func TestStartNetDiscovery_LoadFailureDoesNotStart(t *testing.T) {
 }
 
 // TestNetDiscovery_NoDeadlockBetweenPluginAndDiscoveryGoroutines drives both directions at once:
-// the "plugin" goroutine keeps posting entity changes to discovery while discovery's goroutine
-// keeps delivering applied announcements back onto the plugin goroutine. With direct blocking
-// sends in both directions (both mailboxes are unbuffered) this wedges; with the outboxes it must
-// finish.
+// the "plugin" goroutine keeps pushing entity changes to discovery while discovery's goroutine
+// keeps handing applied announcements back to the plugin goroutine. Both mailboxes are
+// unbuffered, so if the plugin goroutine called discovery directly this would wedge; going
+// through the plugin's Outbox, as the real plugin does, it must finish.
 func TestNetDiscovery_NoDeadlockBetweenPluginAndDiscoveryGoroutines(t *testing.T) {
 	const rounds = 500
 
@@ -153,9 +152,9 @@ func TestNetDiscovery_NoDeadlockBetweenPluginAndDiscoveryGoroutines(t *testing.T
 		mailbox:       mailbox.NewMailbox(),
 		remoteMeta:    make(map[discovery.InstanceID]map[string]*remoteEntityMeta),
 		localEntities: make(map[string]EntitySnapshot),
+		runOnPlugin:   pluginMailbox.Send,
 	}
-	nd.fromPlugin = newOutbox("fromPlugin", nd.mailbox.Send)
-	nd.toPlugin = newOutbox("toPlugin", pluginMailbox.Send)
+	pluginOutbox := mailbox.NewOutbox()
 
 	done := make(chan struct{})
 
@@ -168,7 +167,10 @@ func TestNetDiscovery_NoDeadlockBetweenPluginAndDiscoveryGoroutines(t *testing.T
 		wg.Go(func() {
 			for i := 0; i < rounds; i++ {
 				if err := pluginMailbox.Send(func() {
-					nd.EntityChanged(EntitySnapshot{RawId: "local", Kind: "WirelessThermometer", AsOf: time.Now()})
+					snapshot := EntitySnapshot{RawId: "local", Kind: "WirelessThermometer", AsOf: time.Now()}
+					if err := pluginOutbox.Post(func() { _ = nd.EntityChanged(snapshot) }); err != nil {
+						t.Error(err)
+					}
 				}); err != nil {
 					t.Error(err)
 					return
@@ -191,16 +193,21 @@ func TestNetDiscovery_NoDeadlockBetweenPluginAndDiscoveryGoroutines(t *testing.T
 
 		wg.Wait()
 
-		// Shut down in the same order as stop(), minus the network parts.
-		nd.fromPlugin.Stop()
+		// Shut down in the same order as the plugin's Stop, minus the network parts.
+		pluginOutbox.Stop()
 		nd.mailbox.Stop()
-		nd.toPlugin.Stop()
 	}()
 
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("deadlock: plugin and discovery goroutines did not finish")
+	}
+
+	// runOnPlugin returns once the plugin goroutine has taken a closure, not finished it, so flush
+	// the plugin goroutine before counting.
+	if err := pluginMailbox.ExecVoidFn(func() {}); err != nil {
+		t.Fatal(err)
 	}
 
 	if got := len(sink.appliedTimes()); got != rounds {
@@ -215,17 +222,19 @@ func TestNetDiscovery_RemovedEntityStopsBeingAdvertised(t *testing.T) {
 		remoteMeta:    make(map[discovery.InstanceID]map[string]*remoteEntityMeta),
 		localEntities: make(map[string]EntitySnapshot),
 	}
-	nd.fromPlugin = newOutbox("fromPlugin", nd.mailbox.Send)
-	nd.toPlugin = newOutbox("toPlugin", func(f func()) error { f(); return nil })
 
-	nd.EntityChanged(EntitySnapshot{RawId: "a", Kind: "Thermostat", State: spienvironment.Thermostat{}})
-	nd.EntityChanged(EntitySnapshot{RawId: "b", Kind: "Thermostat", State: spienvironment.Thermostat{}})
-	nd.EntityRemoved("a")
+	for _, err := range []error{
+		nd.EntityChanged(EntitySnapshot{RawId: "a", Kind: "Thermostat", State: spienvironment.Thermostat{}}),
+		nd.EntityChanged(EntitySnapshot{RawId: "b", Kind: "Thermostat", State: spienvironment.Thermostat{}}),
+		nd.EntityRemoved("a"),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	nd.fromPlugin.Stop() // everything posted has been delivered to the mailbox
 	announcements, err := nd.mailbox.Exec(nd.buildEntityAnnouncements)
 	nd.mailbox.Stop()
-	nd.toPlugin.Stop()
 
 	if err != nil {
 		t.Fatal(err)

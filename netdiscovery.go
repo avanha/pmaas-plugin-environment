@@ -64,9 +64,9 @@ type RemoteEntityRef struct {
 
 // remoteEntitySink is how netDiscovery reaches back for the things only the plugin can decide -
 // anything that touches the plugin's own entity map. Every method is invoked on the plugin's own
-// goroutine (netDiscovery delivers each call through toPlugin, never directly from its own
-// goroutine), so implementations touch plugin state freely and must not hop goroutines
-// themselves. netDiscovery never waits for the result.
+// goroutine (netDiscovery hands each call over via runOnPlugin), so implementations touch plugin
+// state freely and must not hop goroutines themselves. netDiscovery waits only until the plugin
+// goroutine has taken the call, not for its result.
 type remoteEntitySink interface {
 	// ApplyRemoteAnnouncement mirrors one already-decoded entity announced by sender into the
 	// plugin's own entity map, creating it on first sight and updating it thereafter.
@@ -123,15 +123,17 @@ type netDiscovery struct {
 	tickerStopCh chan struct{}
 
 	// localEntities is netDiscovery's own copy of this node's locally-sourced entities, kept current
-	// by the plugin pushing changes in (EntityChanged/EntityRemoved) rather than netDiscovery
-	// calling back to ask. That's what keeps netDiscovery from ever blocking on the plugin
-	// goroutine - see outbox. Only ever touched on the mailbox goroutine.
+	// by the plugin pushing changes in (EntityChanged/EntityRemoved/Seed) rather than netDiscovery
+	// calling back to ask. Only ever touched on the mailbox goroutine.
 	localEntities map[string]EntitySnapshot
 
-	// fromPlugin carries closures from the plugin goroutine onto netDiscovery's mailbox goroutine;
-	// toPlugin carries them the other way. Both are non-blocking for the sender.
-	fromPlugin *outbox
-	toPlugin   *outbox
+	// runOnPlugin enqueues a function on the plugin's own goroutine, blocking until that goroutine
+	// receives it. netDiscovery's goroutine may wait on the plugin this way, but the plugin
+	// goroutine must never wait on netDiscovery: it reaches netDiscovery only through its own
+	// mailbox.Outbox (see plugin.postToNetDiscovery), which is what keeps the two from
+	// deadlocking. If the plugin is slow, netDiscovery slows with it and its input (the UDP
+	// socket) backs up and drops datagrams, which heartbeats make up for.
+	runOnPlugin func(func()) error
 
 	// loops tracks runEventLoop and runTicker, so Stop can wait for them.
 	loops    sync.WaitGroup
@@ -159,8 +161,8 @@ type netDiscovery struct {
 //     whenever EnableAnnounce is set on its own (to see incoming Query requests to answer -
 //     an announce-only node still needs to listen for the thing it's responding to).
 //
-// runOnPlugin enqueues a function on the plugin's own goroutine - it may block until that goroutine
-// is free, which is why it's only ever called from toPlugin's delivery goroutine.
+// runOnPlugin enqueues a function on the plugin's own goroutine; see netDiscovery.runOnPlugin for
+// the one-directional waiting rule that goes with it.
 func newNetDiscovery(
 	instanceID discovery.InstanceID,
 	config NetDiscoveryConfig,
@@ -190,11 +192,9 @@ func newNetDiscovery(
 		mailbox:         mailbox.NewMailbox(),
 		remoteMeta:      make(map[discovery.InstanceID]map[string]*remoteEntityMeta),
 		localEntities:   make(map[string]EntitySnapshot),
+		runOnPlugin:     runOnPlugin,
 		tickerStopCh:    make(chan struct{}),
 	}
-
-	nd.fromPlugin = newOutbox("fromPlugin", nd.mailbox.Send)
-	nd.toPlugin = newOutbox("toPlugin", runOnPlugin)
 
 	nd.loops.Go(nd.runEventLoop)
 	nd.loops.Go(nd.runTicker)
@@ -228,11 +228,12 @@ func randomDelayIn(minDelay, maxDelay time.Duration) time.Duration {
 	return minDelay + time.Duration(rand.Int64N(int64(maxDelay-minDelay)))
 }
 
-// Stop tears this actor down and blocks until it's completely finished, so it must NOT be called
-// on the plugin goroutine: the toPlugin outbox needs that goroutine free to drain. Sequence: stop
-// the ticker, send Goodbye if announcing, close the transport/service and wait for the loops that
-// feed the mailbox, drain what the plugin already posted, stop the mailbox, then drain what
-// netDiscovery already posted back to the plugin. Safe to call more than once.
+// Stop tears this actor down and blocks until it's completely finished: stops the ticker, sends
+// Goodbye if announcing, closes the transport/service and waits for the loops that feed the
+// mailbox, then stops the mailbox. Must NOT be called on the plugin goroutine, since the mailbox
+// goroutine may be waiting for it in runOnPlugin. Whatever the plugin already posted to its outbox
+// for netDiscovery should be drained (mailbox.Outbox.Stop) before calling this. Safe to call more
+// than once.
 func (nd *netDiscovery) Stop() {
 	nd.stopOnce.Do(nd.stop)
 }
@@ -255,62 +256,52 @@ func (nd *netDiscovery) stop() {
 	}
 
 	nd.loops.Wait()
-	nd.fromPlugin.Stop()
 	nd.mailbox.Stop()
-	nd.toPlugin.Stop()
 }
 
-// EntityChanged tells netDiscovery the current state of one of this node's locally-sourced
-// entities - on registration and on every state change. It records the snapshot for future
-// heartbeats and query responses, and announces just that entity promptly instead of waiting for
-// the next heartbeat. Never blocks. Safe to call any time, including after Stop (the post just
-// fails and is logged).
-func (nd *netDiscovery) EntityChanged(snapshot EntitySnapshot) {
-	err := nd.fromPlugin.Post(func() {
+// The methods below are how the plugin pushes its locally-sourced entities in. Each blocks until
+// netDiscovery's mailbox goroutine takes the call, and returns an error if netDiscovery has been
+// stopped, so the plugin goroutine must not call them directly: it posts them to its own
+// mailbox.Outbox (see plugin.postToNetDiscovery).
+
+// EntityChanged records the current state of one of this node's locally-sourced entities - on
+// registration and on every state change - for future heartbeats and query responses, and
+// announces just that entity promptly instead of waiting for the next heartbeat.
+func (nd *netDiscovery) EntityChanged(snapshot EntitySnapshot) error {
+	return nd.mailbox.Send(func() {
 		nd.localEntities[snapshot.RawId] = snapshot
 		nd.announceOne(snapshot)
 	})
-	if err != nil {
-		fmt.Printf("netDiscovery: unable to post change for %s: %v\n", snapshot.RawId, err)
-	}
 }
 
 // Seed records entities that were already tracked before netDiscovery started, without announcing
-// them individually. Never blocks.
-func (nd *netDiscovery) Seed(snapshots []EntitySnapshot) {
-	err := nd.fromPlugin.Post(func() {
+// them individually.
+func (nd *netDiscovery) Seed(snapshots []EntitySnapshot) error {
+	return nd.mailbox.Send(func() {
 		for _, snapshot := range snapshots {
 			nd.localEntities[snapshot.RawId] = snapshot
 		}
 	})
-	if err != nil {
-		fmt.Printf("netDiscovery: unable to post seed: %v\n", err)
-	}
 }
 
-// EntityRemoved tells netDiscovery that a locally-sourced entity no longer exists, so heartbeats
-// and query responses stop advertising it. The protocol has no per-entity removal message, so
-// peers drop their mirrored copy when it ages out (netDiscoveryEntityTTL). Also forgets any
-// liveness bookkeeping for the raw id across every sender, so if a mirrored shadow of it ever
-// reappears it starts from a clean TTL rather than a stale lastSeen. Never blocks.
-func (nd *netDiscovery) EntityRemoved(rawId string) {
-	err := nd.fromPlugin.Post(func() {
+// EntityRemoved records that a locally-sourced entity no longer exists, so heartbeats and query
+// responses stop advertising it. The protocol has no per-entity removal message, so peers drop
+// their mirrored copy when it ages out (netDiscoveryEntityTTL). Also forgets any liveness
+// bookkeeping for the raw id across every sender, so if a mirrored shadow of it ever reappears it
+// starts from a clean TTL rather than a stale lastSeen.
+func (nd *netDiscovery) EntityRemoved(rawId string) error {
+	return nd.mailbox.Send(func() {
 		delete(nd.localEntities, rawId)
 		nd.forgetRawId(rawId)
 	})
-	if err != nil {
-		fmt.Printf("netDiscovery: unable to post removal of %s: %v\n", rawId, err)
-	}
 }
 
 // ForgetRawId drops liveness bookkeeping for rawId across every sender, without touching the
 // local entity set. Called when a local entity for the same raw id is about to be registered, so
 // that if the local copy is ever later removed, a shadow reappearing for it starts from a clean
-// TTL. Never blocks.
-func (nd *netDiscovery) ForgetRawId(rawId string) {
-	if err := nd.fromPlugin.Post(func() { nd.forgetRawId(rawId) }); err != nil {
-		fmt.Printf("netDiscovery: unable to post forgetting %s: %v\n", rawId, err)
-	}
+// TTL.
+func (nd *netDiscovery) ForgetRawId(rawId string) error {
+	return nd.mailbox.Send(func() { nd.forgetRawId(rawId) })
 }
 
 func (nd *netDiscovery) forgetRawId(rawId string) {
@@ -597,10 +588,11 @@ func (nd *netDiscovery) sweepStale() {
 	})
 }
 
-// postToPlugin queues f to run on the plugin's goroutine, in order with everything else posted.
+// postToPlugin runs f on the plugin's goroutine. It waits only until that goroutine has taken it
+// (see netDiscovery.runOnPlugin), so successive calls reach the plugin in order.
 func (nd *netDiscovery) postToPlugin(f func()) {
-	if err := nd.toPlugin.Post(f); err != nil {
-		fmt.Printf("netDiscovery: unable to post to plugin: %v\n", err)
+	if err := nd.runOnPlugin(f); err != nil {
+		fmt.Printf("netDiscovery: unable to run on plugin: %v\n", err)
 	}
 }
 

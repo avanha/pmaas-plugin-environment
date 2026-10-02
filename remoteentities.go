@@ -226,9 +226,7 @@ func (p *plugin) removeRemoteShadowsOf(rawId string) {
 		p.removeEntity(id)
 	}
 
-	if p.state.netDiscovery != nil {
-		p.state.netDiscovery.ForgetRawId(rawId)
-	}
+	p.postToNetDiscovery(func(nd *netDiscovery) error { return nd.ForgetRawId(rawId) })
 }
 
 // remoteEntityIdsForRawId returns every locally-mirrored entity id whose raw, un-namespaced

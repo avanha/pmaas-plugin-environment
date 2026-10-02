@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/avanha/pmaas-common/mailbox"
 	"github.com/avanha/pmaas-common/net/discovery"
 	"github.com/avanha/pmaas-plugin-environment/config"
 	"github.com/avanha/pmaas-plugin-environment/data"
@@ -34,6 +35,10 @@ type state struct {
 	// stopped is set once Stop begins, so work already queued on the plugin goroutine (e.g. a
 	// remote announcement) doesn't re-register entities after they've been torn down.
 	stopped bool
+
+	// netOutbox is how the plugin goroutine talks to netDiscovery without ever waiting on it - see
+	// postToNetDiscovery. Non-nil exactly when netDiscovery is.
+	netOutbox *mailbox.Outbox
 }
 
 func (s *state) nextEntityId() int {
@@ -90,10 +95,10 @@ func (p *plugin) Start() {
 }
 
 // Stop runs on the plugin goroutine, so it must not wait on anything that itself needs that
-// goroutine. Net discovery does (its outbound queue delivers onto it), so its shutdown happens on a
-// background goroutine and Stop returns the callback channel the core waits on, closing it once
-// that's finished. The plugin goroutine stays free to run what discovery still has queued
-// (which does nothing, see state.stopped) in the meantime.
+// goroutine. Net discovery does (its goroutine may be waiting to run something here), so its
+// shutdown happens on a background goroutine and Stop returns the callback channel the core waits
+// on, closing it once that's finished. The plugin goroutine stays free to run whatever discovery
+// still hands it (which does nothing, see state.stopped) in the meantime.
 func (p *plugin) Stop() chan func() {
 	fmt.Printf("%T Stopping...\n", *p)
 
@@ -103,8 +108,8 @@ func (p *plugin) Stop() chan func() {
 	p.deregisterEventHandlers()
 	p.deregisterAllEntities()
 
-	nd := p.state.netDiscovery
-	p.state.netDiscovery = nil
+	nd, netOutbox := p.state.netDiscovery, p.state.netOutbox
+	p.state.netDiscovery, p.state.netOutbox = nil, nil
 
 	if nd == nil {
 		return p.state.container.ClosedCallbackChannel()
@@ -113,6 +118,9 @@ func (p *plugin) Stop() chan func() {
 	callbackCh := make(chan func())
 
 	go func() {
+		// Drain what the plugin already queued for discovery before it shuts down, so the last
+		// announcements go out ahead of Goodbye.
+		netOutbox.Stop()
 		nd.Stop()
 		close(callbackCh)
 	}()
@@ -167,11 +175,34 @@ func (p *plugin) startNetDiscovery() {
 	}
 
 	p.state.netDiscovery = nd
+	p.state.netOutbox = mailbox.NewOutbox()
 
 	// Entities tracked before discovery came up (e.g. found by the startup scan) have already
 	// had their change notifications dropped, so hand them over now. Not announced individually:
 	// the first heartbeat or a peer's query will carry them.
-	nd.Seed(p.buildEntitySnapshots())
+	snapshots := p.buildEntitySnapshots()
+	p.postToNetDiscovery(func(nd *netDiscovery) error { return nd.Seed(snapshots) })
+}
+
+// postToNetDiscovery runs f against netDiscovery (if running) on the plugin's netOutbox goroutine.
+// The plugin goroutine must reach netDiscovery only this way: netDiscovery's goroutine blocks on
+// the plugin goroutine (see netDiscovery.runOnPlugin), so a direct call from here, which blocks
+// until netDiscovery's goroutine is free, could wait on it while it waits on us. Posting never
+// blocks, and calls reach netDiscovery in the order posted.
+func (p *plugin) postToNetDiscovery(f func(nd *netDiscovery) error) {
+	nd := p.state.netDiscovery
+	if nd == nil {
+		return
+	}
+
+	err := p.state.netOutbox.Post(func() {
+		if err := f(nd); err != nil {
+			fmt.Printf("%T netDiscovery update failed: %v\n", *p, err)
+		}
+	})
+	if err != nil {
+		fmt.Printf("%T netDiscovery update not queued: %v\n", *p, err)
+	}
 }
 
 // loadOrCreateSenderId returns this installation's persisted net-discovery identity, creating
@@ -227,7 +258,8 @@ func (p *plugin) notifyEntityChanged(rawId string) {
 	}
 
 	if tracked, ok := p.state.entities[rawId]; ok {
-		p.state.netDiscovery.EntityChanged(entitySnapshotFor(rawId, tracked))
+		snapshot := entitySnapshotFor(rawId, tracked)
+		p.postToNetDiscovery(func(nd *netDiscovery) error { return nd.EntityChanged(snapshot) })
 	}
 }
 
@@ -516,9 +548,7 @@ func (p *plugin) onEntityDeregistered(eventInfo *events.EventInfo) error {
 	fmt.Printf("%T onEntityDeregistered(%v)\n", *p, eventInfo)
 	p.removeEntity(event.Id)
 
-	if p.state.netDiscovery != nil {
-		p.state.netDiscovery.EntityRemoved(event.Id)
-	}
+	p.postToNetDiscovery(func(nd *netDiscovery) error { return nd.EntityRemoved(event.Id) })
 
 	return nil
 }
