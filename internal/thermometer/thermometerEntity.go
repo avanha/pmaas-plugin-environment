@@ -55,7 +55,8 @@ func sameCalendarDay(a, b time.Time) bool {
 //   - The high/low extremes reset when the calendar day changes (full date, not day-of-month),
 //     and are checked on every reading rather than only when a value changes.
 //
-// An entirely empty incoming reading (producer has no data yet) is ignored.
+// An incoming reading without HasData (the producer hasn't heard from its device yet) is ignored,
+// rather than being recorded as a real 0 degrees / 0%.
 func (t *Thermometer) applySensorData(incoming spienvironment.SensorData, now time.Time) (temperatureUpdated, humidityUpdated bool) {
 	t.SensorData.HasHumidity = incoming.HasHumidity
 
@@ -63,7 +64,7 @@ func (t *Thermometer) applySensorData(incoming spienvironment.SensorData, now ti
 		return false, false
 	}
 
-	firstReading := t.SensorData.LastUpdateTime.IsZero()
+	firstReading := t.SensorData.IsEmpty()
 
 	if !sameCalendarDay(t.extremesDate, now) {
 		t.HighTemperature = extremeHighSentinel
@@ -86,6 +87,7 @@ func (t *Thermometer) applySensorData(incoming spienvironment.SensorData, now ti
 	temperatureUpdated = firstReading || t.SensorData.Temperature != incoming.Temperature
 	humidityUpdated = incoming.HasHumidity && (firstReading || t.SensorData.Humidity != incoming.Humidity)
 
+	t.SensorData.HasData = true
 	t.SensorData.Temperature = incoming.Temperature
 	t.SensorData.Humidity = incoming.Humidity
 	t.SensorData.LastUpdateTime = readingTime
