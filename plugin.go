@@ -28,6 +28,9 @@ type state struct {
 	entityCounter        int
 	eventReceiverHandles map[string]int
 	netDiscovery         *netDiscovery
+	// stopped is set once Stop begins, so work already queued on the plugin goroutine (e.g. a
+	// remote announcement) doesn't re-register entities after they've been torn down.
+	stopped bool
 }
 
 func (s *state) nextEntityId() int {
@@ -86,9 +89,32 @@ func (p *plugin) Start() {
 func (p *plugin) Stop() chan func() {
 	fmt.Printf("%T Stopping...\n", *p)
 
+	p.state.stopped = true
+
+	// Stop event delivery first so nothing new arrives while tearing down.
+	p.deregisterEventHandlers()
 	p.stopNetDiscovery()
+	p.deregisterAllEntities()
 
 	return p.state.container.ClosedCallbackChannel()
+}
+
+func (p *plugin) deregisterEventHandlers() {
+	for name, handle := range p.state.eventReceiverHandles {
+		if err := p.state.container.DeregisterEventReceiver(handle); err != nil {
+			fmt.Printf("%T Stop: unable to deregister event receiver %s: %v\n", *p, name, err)
+		}
+	}
+
+	clear(p.state.eventReceiverHandles)
+}
+
+// deregisterAllEntities removes every entity this plugin registered with the container, local
+// and remote-mirrored alike.
+func (p *plugin) deregisterAllEntities() {
+	for id := range p.state.entities {
+		p.removeRemoteEntity(id)
+	}
 }
 
 // startNetDiscovery brings up this plugin's netDiscovery actor per p.config.NetDiscovery, if any
@@ -225,6 +251,10 @@ func (p *plugin) getEntities() []any {
 }
 
 func (p *plugin) onEntityRegistered(eventInfo *events.EventInfo) error {
+	if p.state.stopped {
+		return nil
+	}
+
 	fmt.Printf("%T onEntityRegistered(%v)\n", *p, eventInfo)
 	event := eventInfo.Event.(events.EntityRegisteredEvent)
 	_, ok := p.state.entities[event.Id]
@@ -283,19 +313,22 @@ func (p *plugin) registerWirelessThermometer(event events.EntityRegisteredEvent)
 	var stubFactoryFn spi.EntityStubFactoryFunc = func() (any, error) {
 		return instance.GetStub(p.state.container), nil
 	}
-	p.state.entities[event.Id] = instance
 	pmaasEntityId, err := p.state.container.RegisterEntity(
 		instance.Id,
 		entities.WirelessThermometerType,
 		instance.Name,
 		stubFactoryFn)
 
-	if err == nil {
-		instance.PmaasEntityId = pmaasEntityId
-		p.notifyEntityChanged(event.Id)
-	} else {
+	if err != nil {
+		// Don't track an entity the container doesn't know about: it would have no PmaasEntityId,
+		// so any event published for it would carry an empty id.
 		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
+		return
 	}
+
+	instance.PmaasEntityId = pmaasEntityId
+	p.state.entities[event.Id] = instance
+	p.notifyEntityChanged(event.Id)
 }
 
 func (p *plugin) registerThermostat(event events.EntityRegisteredEvent) {
@@ -308,19 +341,21 @@ func (p *plugin) registerThermostat(event events.EntityRegisteredEvent) {
 	var stubFactoryFn spi.EntityStubFactoryFunc = func() (any, error) {
 		return instance.GetStub(p.state.container), nil
 	}
-	p.state.entities[event.Id] = instance
 	pmaasEntityId, err := p.state.container.RegisterEntity(
 		instance.Id,
 		entities.ThermostatType,
 		instance.Name,
 		stubFactoryFn)
 
-	if err == nil {
-		instance.PmaasEntityId = pmaasEntityId
-		p.notifyEntityChanged(event.Id)
-	} else {
+	if err != nil {
+		// See registerWirelessThermometer.
 		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
+		return
 	}
+
+	instance.PmaasEntityId = pmaasEntityId
+	p.state.entities[event.Id] = instance
+	p.notifyEntityChanged(event.Id)
 }
 
 func buildTrackingName(prefix string, name string) string {

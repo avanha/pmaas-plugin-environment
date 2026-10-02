@@ -37,3 +37,9 @@ func (e *WrappedEntity) GetSortKey() string {
 
 	return e.Name
 }
+
+// GetPmaasEntityId returns the id the container assigned at registration, or "" if the entity isn't
+// registered.
+func (e *WrappedEntity) GetPmaasEntityId() string {
+	return e.PmaasEntityId
+}

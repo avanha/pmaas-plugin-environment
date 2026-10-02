@@ -10,7 +10,6 @@ import (
 	"github.com/avanha/pmaas-plugin-environment/internal/common"
 	"github.com/avanha/pmaas-plugin-environment/internal/thermometer"
 	"github.com/avanha/pmaas-spi"
-	spienvironment "github.com/avanha/pmaas-spi/environment"
 	"github.com/avanha/pmaas-spi/tracking"
 )
 
@@ -54,9 +53,7 @@ func (p *plugin) buildEntitySnapshots() []EntitySnapshot {
 			continue
 		}
 
-		if snapshot, ok := entitySnapshotFor(id, tracked); ok {
-			snapshots = append(snapshots, snapshot)
-		}
+		snapshots = append(snapshots, entitySnapshotFor(id, tracked))
 	}
 
 	return snapshots
@@ -93,40 +90,12 @@ func (p *plugin) buildEntitySnapshotFor(rawId string) (EntitySnapshot, bool) {
 		return EntitySnapshot{}, false
 	}
 
-	return entitySnapshotFor(rawId, tracked)
+	return entitySnapshotFor(rawId, tracked), true
 }
 
-// entitySnapshotFor converts a single tracked entity into netDiscovery's portable shape. false
-// if tracked's concrete type isn't one this plugin announces over the network.
-func entitySnapshotFor(id string, tracked common.IStateTracker) (EntitySnapshot, bool) {
-	var kind, name string
-	var portableState any
-
-	switch state := tracked.GetState().(type) {
-	case thermometer.WirelessThermometer:
-		kind, name, portableState = "WirelessThermometer", state.Name, spienvironment.WirelessThermometer{
-			Name:        state.Name,
-			RSSIData:    state.RSSIData,
-			BatteryData: state.BatteryData,
-			SensorData:  state.SensorData,
-		}
-	case thermometer.Thermostat:
-		kind, name, portableState = "Thermostat", state.Name, spienvironment.Thermostat{
-			Name:           state.Name,
-			SensorData:     state.SensorData,
-			HvacStatus:     state.HvacStatus,
-			Mode:           state.Mode,
-			EcoMode:        state.EcoMode,
-			HeatSetpoint:   state.HeatSetpoint,
-			CoolSetpoint:   state.CoolSetpoint,
-			Connectivity:   state.Connectivity,
-			OfflineSince:   state.OfflineSince,
-			OnlineSince:    state.OnlineSince,
-			LastUpdateTime: state.SensorData.LastUpdateTime,
-		}
-	default:
-		return EntitySnapshot{}, false
-	}
+// entitySnapshotFor converts a single tracked entity into netDiscovery's portable shape.
+func entitySnapshotFor(id string, tracked common.IStateTracker) EntitySnapshot {
+	kind, name, portableState := tracked.PortableState()
 
 	return EntitySnapshot{
 		RawId: id,
@@ -134,7 +103,7 @@ func entitySnapshotFor(id string, tracked common.IStateTracker) (EntitySnapshot,
 		Name:  name,
 		State: portableState,
 		AsOf:  time.Now(),
-	}, true
+	}
 }
 
 // ApplyRemoteAnnouncement implements remoteEntitySink.
@@ -148,6 +117,10 @@ func (p *plugin) ApplyRemoteAnnouncement(
 // applyRemoteAnnouncement does the actual entity-map mutation - must run on the plugin's own
 // goroutine (see ApplyRemoteAnnouncement).
 func (p *plugin) applyRemoteAnnouncement(sender discovery.InstanceID, kind, rawId, name string, decodedState any) {
+	if p.state.stopped {
+		return
+	}
+
 	id := remoteEntityId(sender, rawId)
 
 	// Prefer a local copy of the same device over mirroring it: rawId is the id the announcing
@@ -175,13 +148,23 @@ func (p *plugin) applyRemoteAnnouncement(sender discovery.InstanceID, kind, rawI
 	if !exists {
 		switch kind {
 		case "WirelessThermometer":
-			tracked = p.createRemoteWirelessThermometer(id, name)
+			if created := p.createRemoteWirelessThermometer(id, name); created != nil {
+				tracked = created
+			}
 		case "Thermostat":
-			tracked = p.createRemoteThermostat(id, name)
+			if created := p.createRemoteThermostat(id, name); created != nil {
+				tracked = created
+			}
 		default:
 			fmt.Printf("%T applyRemoteAnnouncement: unknown entity kind %q for %s from %s\n", *p, kind, rawId, sender)
 			return
 		}
+
+		if tracked == nil {
+			// Registration failed (already logged); don't track it.
+			return
+		}
+
 		p.state.entities[id] = tracked
 	}
 
@@ -195,6 +178,7 @@ func (p *plugin) applyRemoteAnnouncement(sender discovery.InstanceID, kind, rawI
 	}
 }
 
+// createRemoteWirelessThermometer returns nil if the entity couldn't be registered; a later Announce retries.
 func (p *plugin) createRemoteWirelessThermometer(id string, name string) *thermometer.WirelessThermometer {
 	instance := thermometer.CreateWirelessThermometer(
 		p.state.nextEntityId(), id, name, entities.WirelessThermometerType, tracking.Config{})
@@ -207,13 +191,15 @@ func (p *plugin) createRemoteWirelessThermometer(id string, name string) *thermo
 		instance.Id, entities.WirelessThermometerType, instance.Name, stubFactoryFn)
 	if err != nil {
 		fmt.Printf("%T createRemoteWirelessThermometer: %s could not be registered: %v\n", *p, id, err)
-	} else {
-		instance.PmaasEntityId = pmaasEntityId
+		return nil
 	}
+
+	instance.PmaasEntityId = pmaasEntityId
 
 	return instance
 }
 
+// createRemoteThermostat returns nil if the entity couldn't be registered; a later Announce retries.
 func (p *plugin) createRemoteThermostat(id string, name string) *thermometer.Thermostat {
 	instance := thermometer.CreateThermostat(
 		p.state.nextEntityId(), id, name, entities.ThermostatType, tracking.Config{})
@@ -226,9 +212,10 @@ func (p *plugin) createRemoteThermostat(id string, name string) *thermometer.The
 		instance.Id, entities.ThermostatType, instance.Name, stubFactoryFn)
 	if err != nil {
 		fmt.Printf("%T createRemoteThermostat: %s could not be registered: %v\n", *p, id, err)
-	} else {
-		instance.PmaasEntityId = pmaasEntityId
+		return nil
 	}
+
+	instance.PmaasEntityId = pmaasEntityId
 
 	return instance
 }
@@ -251,30 +238,22 @@ func (p *plugin) RemoveStaleRemoteEntities(refs []RemoteEntityRef) error {
 	})
 }
 
+// removeRemoteEntity deregisters and forgets the tracked entity with the given map key. Despite
+// the name it works for any tracked entity, local or mirrored - see deregisterAllEntities.
 func (p *plugin) removeRemoteEntity(id string) {
 	tracked, ok := p.state.entities[id]
 	if !ok {
 		return
 	}
 
-	if pmaasEntityId := remotePmaasEntityId(tracked); pmaasEntityId != "" {
+	if pmaasEntityId := tracked.GetPmaasEntityId(); pmaasEntityId != "" {
 		if err := p.state.container.DeregisterEntity(pmaasEntityId); err != nil {
 			fmt.Printf("%T removeRemoteEntity: unable to deregister %s: %v\n", *p, id, err)
 		}
 	}
 
+	tracked.CloseStubIfPresent()
 	delete(p.state.entities, id)
-}
-
-func remotePmaasEntityId(tracked common.IStateTracker) string {
-	switch state := tracked.GetState().(type) {
-	case thermometer.WirelessThermometer:
-		return state.PmaasEntityId
-	case thermometer.Thermostat:
-		return state.PmaasEntityId
-	default:
-		return ""
-	}
 }
 
 // remoteEntityId builds the local entity-map key for an entity announced by senderId,

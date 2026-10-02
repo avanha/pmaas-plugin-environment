@@ -126,6 +126,9 @@ type netDiscovery struct {
 	remoteMeta map[discovery.InstanceID]map[string]*remoteEntityMeta
 
 	tickerStopCh chan struct{}
+
+	// startupQueryTimer is the pending delayed initial Query, nil unless EnableDiscover.
+	startupQueryTimer *time.Timer
 }
 
 // newNetDiscovery brings up multicast discovery per config, if any of it is enabled, and starts
@@ -182,7 +185,7 @@ func newNetDiscovery(instanceID discovery.InstanceID, config NetDiscoveryConfig,
 		// netDiscoveryStartupDelayMin/Max - and dispatched via time.AfterFunc so the delay never
 		// blocks newNetDiscovery's caller.
 		delay := randomDelayIn(netDiscoveryStartupDelayMin, netDiscoveryStartupDelayMax)
-		time.AfterFunc(delay, func() {
+		nd.startupQueryTimer = time.AfterFunc(delay, func() {
 			if err := nd.mailbox.Send(nd.sendInitialQuery); err != nil {
 				// netDiscovery was stopped before the startup delay elapsed - nothing to do.
 				fmt.Printf("netDiscovery: unable to enqueue initial query: %v\n", err)
@@ -209,6 +212,10 @@ func randomDelayIn(minDelay, maxDelay time.Duration) time.Duration {
 // mailbox.
 func (nd *netDiscovery) Stop() {
 	close(nd.tickerStopCh)
+
+	if nd.startupQueryTimer != nil {
+		nd.startupQueryTimer.Stop()
+	}
 
 	if nd.announceEnabled {
 		if err := nd.service.SendGoodbye(); err != nil {

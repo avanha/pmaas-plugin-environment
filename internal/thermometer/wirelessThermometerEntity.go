@@ -57,6 +57,16 @@ func (wt *WirelessThermometer) GetStub(container spi.IPMAASContainer) entities.W
 
 }
 
+// CloseStubIfPresent invalidates the stub handed out by GetStub, if any, so later calls through it
+// fail fast rather than reaching a deregistered entity. Call after DeregisterEntity, on the plugin
+// goroutine, like GetStub.
+func (wt *WirelessThermometer) CloseStubIfPresent() {
+	if wt.stub != nil {
+		wt.stub.close()
+		wt.stub = nil
+	}
+}
+
 func (wt *WirelessThermometer) TrackingConfig() tracking.Config {
 	return wt.trackingConfig
 }
@@ -80,7 +90,19 @@ func (wt *WirelessThermometer) GetSortKey() string {
 }
 
 func (wt *WirelessThermometer) GetState() any {
-	return *wt
+	snapshot := *wt
+	snapshot.stub = nil
+
+	return snapshot
+}
+
+func (wt *WirelessThermometer) PortableState() (string, string, any) {
+	return "WirelessThermometer", wt.Name, spienvironment.WirelessThermometer{
+		Name:        wt.Name,
+		RSSIData:    wt.RSSIData,
+		BatteryData: wt.BatteryData,
+		SensorData:  wt.SensorData,
+	}
 }
 
 func (wt *WirelessThermometer) ProcessNewState(newState any, publishEventFunc func(pmassEntityId string, event any)) error {

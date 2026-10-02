@@ -71,6 +71,16 @@ func (t *Thermostat) GetStub(container spi.IPMAASContainer) entities.Thermostat 
 	return t.stub
 }
 
+// CloseStubIfPresent invalidates the stub handed out by GetStub, if any, so later calls through it
+// fail fast rather than reaching a deregistered entity. Call after DeregisterEntity, on the plugin
+// goroutine, like GetStub.
+func (t *Thermostat) CloseStubIfPresent() {
+	if t.stub != nil {
+		t.stub.close()
+		t.stub = nil
+	}
+}
+
 func (t *Thermostat) TrackingConfig() tracking.Config {
 	return t.trackingConfig
 }
@@ -98,7 +108,26 @@ func (t *Thermostat) GetSortKey() string {
 }
 
 func (t *Thermostat) GetState() any {
-	return *t
+	snapshot := *t
+	snapshot.stub = nil
+
+	return snapshot
+}
+
+func (t *Thermostat) PortableState() (string, string, any) {
+	return "Thermostat", t.Name, spienvironment.Thermostat{
+		Name:           t.Name,
+		SensorData:     t.SensorData,
+		HvacStatus:     t.HvacStatus,
+		Mode:           t.Mode,
+		EcoMode:        t.EcoMode,
+		HeatSetpoint:   t.HeatSetpoint,
+		CoolSetpoint:   t.CoolSetpoint,
+		Connectivity:   t.Connectivity,
+		OfflineSince:   t.OfflineSince,
+		OnlineSince:    t.OnlineSince,
+		LastUpdateTime: t.SensorData.LastUpdateTime,
+	}
 }
 
 func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEntityId string, event any)) error {
