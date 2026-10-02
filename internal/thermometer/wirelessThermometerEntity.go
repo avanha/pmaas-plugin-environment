@@ -139,17 +139,20 @@ func (wt *WirelessThermometer) ProcessNewState(newState any, publishEventFunc fu
 		nameUpdated = true
 	}
 
-	if wt.RSSIData.RSSI != newWirelessThermometerState.RSSIData.RSSI {
-		wt.RSSIData.RSSI = newWirelessThermometerState.RSSIData.RSSI
-		wt.RSSIData.LastUpdateTime = newWirelessThermometerState.RSSIData.LastUpdateTime
-		rssiUpdated = true
+	// An empty incoming value means the source doesn't know it yet; keep what we have. Otherwise
+	// always take the incoming value (so its timestamp stays current), and report a change when it
+	// is the first value we've seen or the level differs - a real 0% battery must not be mistaken
+	// for the zero value.
+	if incoming := newWirelessThermometerState.RSSIData; !incoming.IsEmpty() {
+		rssiUpdated = wt.RSSIData.IsEmpty() || wt.RSSIData.RSSI != incoming.RSSI
+		wt.RSSIData = incoming
 	}
 
-	if wt.BatteryData.Level != newWirelessThermometerState.BatteryData.Level {
-		wt.BatteryData.Level = newWirelessThermometerState.BatteryData.Level
-		wt.BatteryData.LastUpdateTime = newWirelessThermometerState.BatteryData.LastUpdateTime
-		batteryLevelUpdated = true
+	if incoming := newWirelessThermometerState.BatteryData; !incoming.IsEmpty() {
+		batteryLevelUpdated = wt.BatteryData.IsEmpty() || wt.BatteryData.Level != incoming.Level
+		wt.BatteryData = incoming
 	}
+
 	temperatureUpdated, humidityUpdated := wt.applySensorData(newWirelessThermometerState.SensorData, now)
 
 	if nameUpdated {

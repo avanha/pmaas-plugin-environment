@@ -25,6 +25,7 @@ var wirelessThermometerTemplate = spi.TemplateInfo{
 	FuncMap: template.FuncMap{
 		"CelsiusToFahrenheit": celsiusToFahrenheit,
 		"RelativeTime":        relativeTime,
+		"FormatClock":         formatClock,
 		"IsStale":             isStale,
 		"IsLowBattery":        isLowBattery,
 	},
@@ -37,6 +38,7 @@ var thermostatTemplate = spi.TemplateInfo{
 	FuncMap: template.FuncMap{
 		"CelsiusToFahrenheit":    celsiusToFahrenheit,
 		"RelativeTime":           relativeTime,
+		"FormatClock":            formatClock,
 		"IsOffline":              isOffline,
 		"IsOnline":               isOnline,
 		"FormatConnectivityTime": formatConnectivityTime,
@@ -83,55 +85,45 @@ func (h *Handler) handleHttpListRequest(w http.ResponseWriter, r *http.Request) 
 		items = nil
 	}
 
-	// Second, we want to pass a list of pointers to the entities we received to avoid
-	// copying, so convert the entity list to a list of pointers to the entities.
-	itemRefs := make([]any, len(items))
+	// Second, pass pointers to the entities rather than copies, to avoid copying them again while
+	// rendering. Entities arrive as the concrete value snapshots from GetState; anything else is
+	// something the renderers registered in Init couldn't render anyway, so it's skipped, not
+	// passed on as a nil placeholder.
+	itemRefs := make([]any, 0, len(items))
 
-	for i := 0; i < len(items); i = i + 1 {
-		switch typedItem := items[i].(type) {
-		case thermometer.Thermometer:
-			itemRefs[i] = &typedItem
+	for _, item := range items {
+		switch typedItem := item.(type) {
 		case thermometer.WirelessThermometer:
-			// This is the type-specific way to get a pointer to a struct.  It should be faster
-			// than the reflection-based approach below.
-			itemRefs[i] = &typedItem
+			itemRefs = append(itemRefs, &typedItem)
 		case thermometer.Thermostat:
-			itemRefs[i] = &typedItem
+			itemRefs = append(itemRefs, &typedItem)
 		default:
-			itemType := reflect.TypeOf(typedItem)
-			itemTypeKind := itemType.Kind()
-			switch itemTypeKind {
-			case reflect.Struct:
-				// This is a generic way to construct a pointer to struct
-				typedItemPointer := reflect.New(itemType)
-				typedItemPointer.Elem().Set(reflect.ValueOf(typedItem))
-				itemRefs[i] = typedItemPointer.Interface()
-			case reflect.Interface, reflect.Pointer:
-				// Interfaces and pointers are already references and don't need any conversion.
-				itemRefs[i] = typedItem
-			}
+			fmt.Printf("environment.http handleHttpListRequest: skipping unexpected entity type %T\n", item)
 		}
 	}
 
 	// Third, sort the entities using their sort keys
-	sort.Slice(
-		itemRefs,
-		func(i int, j int) bool {
-			leftValue, leftOk := itemRefs[i].(common.ISortable)
-
-			if leftOk {
-				rightValue, rightOk := itemRefs[j].(common.ISortable)
-
-				if rightOk {
-					return leftValue.GetSortKey() < rightValue.GetSortKey()
-				}
-			}
-			return true
-		})
+	sortBySortKey(itemRefs)
 
 	// Lastly, render the sorted entity list.  The render plugin will choose a matching rendered based on
 	// the entity type.
 	h.container.RenderList(w, r, listRenderOptions, itemRefs)
+}
+
+// sortBySortKey orders items by their common.ISortable key. Items that aren't sortable go after
+// all sortable ones, otherwise keeping their original order, so the comparator is a consistent
+// strict weak ordering.
+func sortBySortKey(items []any) {
+	sort.SliceStable(items, func(i int, j int) bool {
+		left, leftOk := items[i].(common.ISortable)
+		right, rightOk := items[j].(common.ISortable)
+
+		if !leftOk || !rightOk {
+			return leftOk && !rightOk
+		}
+
+		return left.GetSortKey() < right.GetSortKey()
+	})
 }
 
 func (h *Handler) wirelessThermometerRendererFactory() (spi.EntityRenderer, error) {
@@ -230,6 +222,10 @@ func isLowBattery(level int) bool {
 }
 
 func relativeTime(timeValue time.Time) string {
+	if timeValue.IsZero() {
+		return "never"
+	}
+
 	elapsed := time.Since(timeValue).Truncate(time.Second)
 
 	if elapsed.Seconds() < 30 {
@@ -248,5 +244,19 @@ func relativeTime(timeValue time.Time) string {
 
 	elapsed = elapsed.Truncate(time.Hour)
 
-	return fmt.Sprintf("%vh", elapsed.Hours())
+	if elapsed.Hours() < 48 {
+		return fmt.Sprintf("%vh", elapsed.Hours())
+	}
+
+	return fmt.Sprintf("%vd", int(elapsed.Hours()/24))
+}
+
+// formatClock renders a time of day for the high/low extremes, or nothing for a time that was
+// never set.
+func formatClock(timeValue time.Time) string {
+	if timeValue.IsZero() {
+		return ""
+	}
+
+	return timeValue.Format("3:04 PM")
 }

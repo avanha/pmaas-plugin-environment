@@ -52,12 +52,12 @@
             <div class="temp high">
                 <div class="temp-data celsius">{{printf "%.2f" .HighTemperature}} C</div>
                 <div class="temp-data fahrenheit">{{CelsiusToFahrenheit .HighTemperature | printf "%.2f"}} F</div>
-                <div class="timestamp">{{.HighTemperatureTime.Format "3:04 PM"}}</div>
+                <div class="timestamp">{{FormatClock .HighTemperatureTime}}</div>
             </div>
             <div class="temp low">
                 <div class="temp-data celsius">{{printf "%.2f" .LowTemperature}} C</div>
                 <div class="temp-data fahrenheit">{{CelsiusToFahrenheit .LowTemperature | printf "%.2f"}} F</div>
-                <div class="timestamp">{{.LowTemperatureTime.Format "3:04 PM"}}</div>
+                <div class="timestamp">{{FormatClock .LowTemperatureTime}}</div>
             </div>
         </div>
     {{end}}
