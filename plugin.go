@@ -1,7 +1,9 @@
 package environment
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"reflect"
 	"strings"
 
@@ -128,7 +130,14 @@ func (p *plugin) startNetDiscovery() {
 		return
 	}
 
-	instanceID := p.loadOrCreateSenderId()
+	instanceID, err := p.loadOrCreateSenderId()
+	if err != nil {
+		// Without the persisted id we can't tell "first run" from "couldn't read it", and guessing
+		// would mint a new identity and overwrite the saved one, making every peer see this node
+		// as brand new.
+		fmt.Printf("%T WARNING: not starting net discovery, unable to load persisted config: %v\n", *p, err)
+		return
+	}
 
 	nd, err := newNetDiscovery(instanceID, netDiscoveryConfig, p)
 	if err != nil {
@@ -157,8 +166,12 @@ func (p *plugin) stopNetDiscovery() {
 // "this is the same node I heard from before" rather than seeing what looks like a new peer,
 // with a full new set of entities, every time this plugin restarts. See
 // config.PersistentConfigV1.NetDiscoverySenderId for how to reset it.
-func (p *plugin) loadOrCreateSenderId() discovery.InstanceID {
-	persistentConfig, _ := p.state.container.LoadConfig(func(typeName string) any {
+//
+// A missing config file is the normal first-run case and creates a new id. Any other failure to
+// load (unreadable or corrupt file, unrecognized payload type) is returned as an error rather
+// than treated as "no id yet", so a transient problem can never overwrite a good saved id.
+func (p *plugin) loadOrCreateSenderId() (discovery.InstanceID, error) {
+	persistentConfig, err := p.state.container.LoadConfig(func(typeName string) any {
 		v1Type := reflect.TypeFor[config.PersistentConfigV1]()
 		v1TypeName := v1Type.PkgPath() + "/" + v1Type.Name()
 
@@ -169,22 +182,26 @@ func (p *plugin) loadOrCreateSenderId() discovery.InstanceID {
 		return nil
 	})
 
-	if persistentConfig != nil {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+
+	if err == nil {
 		if loaded, ok := persistentConfig.(*config.PersistentConfigV1); ok && loaded.NetDiscoverySenderId != "" {
-			return discovery.InstanceID(loaded.NetDiscoverySenderId)
+			return discovery.InstanceID(loaded.NetDiscoverySenderId), nil
 		}
 	}
 
 	senderId := discovery.NewInstanceID()
 
-	err := p.state.container.SaveConfig(config.PersistentConfigV1{
+	err = p.state.container.SaveConfig(config.PersistentConfigV1{
 		NetDiscoverySenderId: string(senderId),
 	})
 	if err != nil {
 		fmt.Printf("%T loadOrCreateSenderId: unable to persist new sender id: %v\n", *p, err)
 	}
 
-	return senderId
+	return senderId, nil
 }
 
 // notifyEntityChanged tells netDiscovery (if running) that the entity identified by rawId

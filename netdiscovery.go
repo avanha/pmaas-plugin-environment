@@ -102,6 +102,12 @@ type remoteEntitySink interface {
 type remoteEntityMeta struct {
 	sourceIP string
 	lastSeen time.Time
+
+	// lastAsOf is the newest EntitySnapshot.AsOf (the announcing node's own clock) applied for this
+	// entity, used to drop an Announce that UDP delivered out of order - see applyAnnouncement. Only
+	// ever compared against other values from the same sender, so clock skew between nodes doesn't
+	// matter. Zero until an announcement carrying an AsOf has been applied.
+	lastAsOf time.Time
 }
 
 // netDiscovery is its own actor - own Mailbox, own goroutines - running optional multicast
@@ -425,7 +431,20 @@ func (nd *netDiscovery) applyAnnouncement(event discovery.Event, announcement di
 	// Refresh TTL/display metadata regardless of what the sink ultimately does with this
 	// announcement (e.g. it may be shadowed by a local copy and discarded) - hearing about it at
 	// all is still evidence the peer and this entity are alive. See remoteEntityMeta's doc.
-	nd.touch(event.Sender, announcement.EntityId, event.From)
+	meta := nd.touch(event.Sender, announcement.EntityId, event.From)
+
+	// UDP doesn't preserve order: a change-triggered Announce can be overtaken by an earlier one
+	// (or a heartbeat snapshot taken before the change), and applying it would roll the mirrored
+	// state back until the next announce. A peer that doesn't send AsOf is always applied.
+	if !announcement.AsOf.IsZero() {
+		if announcement.AsOf.Before(meta.lastAsOf) {
+			fmt.Printf("netDiscovery: dropping stale announce for %s %q from %s (as of %s, already applied %s)\n",
+				announcement.EntityKind, announcement.EntityId, event.Sender, announcement.AsOf, meta.lastAsOf)
+			return
+		}
+
+		meta.lastAsOf = announcement.AsOf
+	}
 
 	err = nd.sink.ApplyRemoteAnnouncement(
 		event.Sender, announcement.EntityKind, announcement.EntityId, announcement.Name, decodedState, announcement.AsOf)
@@ -435,13 +454,25 @@ func (nd *netDiscovery) applyAnnouncement(event discovery.Event, announcement di
 	}
 }
 
-func (nd *netDiscovery) touch(sender discovery.InstanceID, rawId string, from *net.UDPAddr) {
+// touch records that rawId from sender was just heard from, creating its bookkeeping on first
+// sight, and returns it.
+func (nd *netDiscovery) touch(sender discovery.InstanceID, rawId string, from *net.UDPAddr) *remoteEntityMeta {
 	bySender, ok := nd.remoteMeta[sender]
 	if !ok {
 		bySender = make(map[string]*remoteEntityMeta)
 		nd.remoteMeta[sender] = bySender
 	}
-	bySender[rawId] = &remoteEntityMeta{sourceIP: sourceIPString(from), lastSeen: time.Now()}
+
+	meta, ok := bySender[rawId]
+	if !ok {
+		meta = &remoteEntityMeta{}
+		bySender[rawId] = meta
+	}
+
+	meta.sourceIP = sourceIPString(from)
+	meta.lastSeen = time.Now()
+
+	return meta
 }
 
 func decodeAnnouncementState(announcement discovery.EntityAnnouncement) (any, error) {
