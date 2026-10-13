@@ -1,6 +1,6 @@
 <div class="entity-environment-thermostat">
     <div class="title-row">
-        <div class="name">{{.Name}}</div>
+        <div class="name">{{.Name | html}}</div>
         <div class="mode-icons">
             {{if IsOffline .Connectivity}}
                 <i class="bi bi-wifi-off connectivity-icon offline"

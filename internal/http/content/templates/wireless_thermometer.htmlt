@@ -3,12 +3,12 @@
         <div class="stale-warning" title="No update in over an hour"><i class="bi bi-exclamation-triangle-fill"></i></div>
     {{end}}
     <div class="title-row">
-        <div class="name">{{.Name}}</div>
+        <div class="name">{{.Name | html}}</div>
         {{if not .RSSIData.IsEmpty}}
             {{with .RSSIData -}}
             <div class="rssi-data">
-                <div><i class="bi bi-reception-4"></i> {{.RSSI}}</div>
-                {{/*<div>{{.LastUpdateTime}}</div>*/}}
+                <div><i class="bi bi-reception-4"></i> {{.RSSI | html}}</div>
+                {{/*<div>{{.LastUpdateTime | html}}</div>*/}}
             </div>
             {{end}}
         {{end}}
@@ -16,7 +16,7 @@
             {{with .BatteryData -}}
             <div class="battery-data">
                 <div class="value"><i class="bi bi-battery{{if IsLowBattery .Level}} low{{end}}"></i> {{.Level}}</div>
-                {{/*<div>{{.LastUpdateTime}}</div>*/}}
+                {{/*<div>{{.LastUpdateTime | html}}</div>*/}}
             </div>
             {{end}}
         {{end}}
