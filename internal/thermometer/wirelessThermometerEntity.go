@@ -190,9 +190,5 @@ func (wt *WirelessThermometer) ProcessNewState(newState any, publishEventFunc fu
 		publishEventFunc(wt.PmaasEntityId, event)
 	}
 
-	if !nameUpdated && !temperatureUpdated && !humidityUpdated && !rssiUpdated && !batteryLevelUpdated {
-		fmt.Printf("State change for %s, but no significant state change detected\n", wt.Id)
-	}
-
 	return nil
 }

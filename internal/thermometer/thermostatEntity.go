@@ -246,10 +246,5 @@ func (t *Thermostat) ProcessNewState(newState any, publishEventFunc func(pmassEn
 		publishEventFunc(t.PmaasEntityId, event)
 	}
 
-	if !nameUpdated && !temperatureUpdated && !humidityUpdated && !hvacStatusUpdated && !modeUpdated &&
-		!ecoModeUpdated && !connectivityUpdated {
-		fmt.Printf("State change for %s, but no significant state change detected\n", t.Id)
-	}
-
 	return nil
 }
