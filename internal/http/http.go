@@ -30,6 +30,7 @@ var wirelessThermometerTemplate = spi.TemplateInfo{
 		"FormatClock":         formatClock,
 		"IsStale":             isStale,
 		"IsLowBattery":        isLowBattery,
+		"BatteryIcon":         batteryIcon,
 	},
 	Paths:  []string{"templates/wireless_thermometer.htmlt"},
 	Styles: []string{"css/wireless_thermometer.css"},
@@ -220,6 +221,18 @@ func isStale(timeValue time.Time) bool {
 // lowBatteryThreshold is the battery percentage below which a wireless thermometer's
 // battery icon is flagged as low.
 const lowBatteryThreshold = 10
+
+// batteryIcon is the Bootstrap icon that looks like a battery with this much in it.
+func batteryIcon(level int) string {
+	switch {
+	case level >= 70:
+		return "battery-full"
+	case level >= 30:
+		return "battery-half"
+	default:
+		return "battery"
+	}
+}
 
 func isLowBattery(level int) bool {
 	return level < lowBatteryThreshold
