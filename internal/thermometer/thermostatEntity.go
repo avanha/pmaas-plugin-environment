@@ -2,6 +2,7 @@ package thermometer
 
 import (
 	"fmt"
+	"github.com/avanha/pmaas-spi/logging"
 	"reflect"
 	"time"
 
@@ -61,6 +62,7 @@ type Thermostat struct {
 func (t *Thermostat) GetStub(container spi.IPMAASContainer) entities.Thermostat {
 	if t.stub == nil {
 		t.stub = newThermostatStub(
+			logging.For(container, "stub"),
 			t.Id,
 			&spicommon.ThreadSafeEntityWrapper[entities.Thermostat]{
 				Container: container,

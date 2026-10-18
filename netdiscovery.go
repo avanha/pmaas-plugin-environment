@@ -3,6 +3,7 @@ package environment
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"net"
 	"sync"
@@ -107,6 +108,7 @@ type remoteEntityMeta struct {
 // see remoteEntitySink for the narrow interface it uses instead of reaching into plugin state
 // directly.
 type netDiscovery struct {
+	log        *slog.Logger
 	instanceID discovery.InstanceID
 	service    *discovery.Service
 	sink       remoteEntitySink
@@ -164,6 +166,7 @@ type netDiscovery struct {
 // runOnPlugin enqueues a function on the plugin's own goroutine; see netDiscovery.runOnPlugin for
 // the one-directional waiting rule that goes with it.
 func newNetDiscovery(
+	log *slog.Logger,
 	instanceID discovery.InstanceID,
 	config NetDiscoveryConfig,
 	sink remoteEntitySink,
@@ -184,6 +187,7 @@ func newNetDiscovery(
 	}
 
 	nd := &netDiscovery{
+		log:             log,
 		instanceID:      instanceID,
 		service:         discovery.NewService(transport),
 		sink:            sink,
@@ -209,7 +213,7 @@ func newNetDiscovery(
 		nd.startupQueryTimer = time.AfterFunc(delay, func() {
 			if err := nd.mailbox.Send(nd.sendInitialQuery); err != nil {
 				// netDiscovery was stopped before the startup delay elapsed - nothing to do.
-				fmt.Printf("netDiscovery: unable to enqueue initial query: %v\n", err)
+				nd.log.Error("unable to enqueue initial query", "error", err)
 			}
 		})
 	}
@@ -219,7 +223,7 @@ func newNetDiscovery(
 
 func (nd *netDiscovery) sendInitialQuery() {
 	if err := nd.service.SendQuery(); err != nil {
-		fmt.Printf("netDiscovery: unable to send initial query: %v\n", err)
+		nd.log.Error("unable to send initial query", "error", err)
 	}
 }
 
@@ -247,12 +251,12 @@ func (nd *netDiscovery) stop() {
 
 	if nd.announceEnabled {
 		if err := nd.service.SendGoodbye(); err != nil {
-			fmt.Printf("netDiscovery: unable to send goodbye: %v\n", err)
+			nd.log.Error("unable to send goodbye", "error", err)
 		}
 	}
 
 	if err := nd.service.Close(); err != nil {
-		fmt.Printf("netDiscovery: error closing discovery service: %v\n", err)
+		nd.log.Error("error closing discovery service", "error", err)
 	}
 
 	nd.loops.Wait()
@@ -318,7 +322,7 @@ func (nd *netDiscovery) runEventLoop() {
 		if err := nd.mailbox.Send(func() { nd.handleEvent(event) }); err != nil {
 			// netDiscovery is shutting down - this loop exits on its own once Close() finishes
 			// closing service.Events().
-			fmt.Printf("netDiscovery: unable to enqueue event: %v\n", err)
+			nd.log.Error("unable to enqueue event", "error", err)
 		}
 	}
 }
@@ -334,7 +338,7 @@ func (nd *netDiscovery) runTicker() {
 		select {
 		case <-ticker.C:
 			if err := nd.mailbox.Send(nd.onTick); err != nil {
-				fmt.Printf("netDiscovery: unable to enqueue tick: %v\n", err)
+				nd.log.Error("unable to enqueue tick", "error", err)
 			}
 		case <-nd.tickerStopCh:
 			return
@@ -356,7 +360,7 @@ func (nd *netDiscovery) handleEvent(event discovery.Event) {
 	case discovery.MessageTypeGoodbye:
 		nd.handleGoodbye(event)
 	default:
-		fmt.Printf("netDiscovery: unknown message type %q from %s\n", event.Envelope.Type, event.Sender)
+		nd.log.Warn("unknown message type", "type", event.Envelope.Type, "sender", event.Sender)
 	}
 }
 
@@ -375,7 +379,7 @@ func (nd *netDiscovery) handleQuery(event discovery.Event) {
 	delay := randomDelayIn(0, netDiscoveryQueryResponseJitter)
 	time.AfterFunc(delay, func() {
 		if err := nd.mailbox.Send(nd.announceNow); err != nil {
-			fmt.Printf("netDiscovery: unable to enqueue delayed response to %s: %v\n", event.Sender, err)
+			nd.log.Error("unable to enqueue delayed response", "sender", event.Sender, "error", err)
 		}
 	})
 }
@@ -388,7 +392,7 @@ func (nd *netDiscovery) announceNow() {
 	}
 
 	if err := nd.service.SendAnnounce(nd.buildEntityAnnouncements()); err != nil {
-		fmt.Printf("netDiscovery: unable to announce: %v\n", err)
+		nd.log.Error("unable to announce", "error", err)
 	}
 }
 
@@ -398,7 +402,7 @@ func (nd *netDiscovery) buildEntityAnnouncements() []discovery.EntityAnnouncemen
 	for _, entity := range nd.localEntities {
 		announcement, err := encodeAnnouncement(entity)
 		if err != nil {
-			fmt.Printf("netDiscovery: unable to encode state for %s: %v\n", entity.RawId, err)
+			nd.log.Error("unable to encode state", "rawId", entity.RawId, "error", err)
 			continue
 		}
 
@@ -418,12 +422,12 @@ func (nd *netDiscovery) announceOne(snapshot EntitySnapshot) {
 
 	announcement, err := encodeAnnouncement(snapshot)
 	if err != nil {
-		fmt.Printf("netDiscovery: unable to encode state for %s: %v\n", snapshot.RawId, err)
+		nd.log.Error("unable to encode state", "rawId", snapshot.RawId, "error", err)
 		return
 	}
 
 	if err := nd.service.SendAnnounce([]discovery.EntityAnnouncement{announcement}); err != nil {
-		fmt.Printf("netDiscovery: unable to announce %s: %v\n", snapshot.RawId, err)
+		nd.log.Error("unable to announce", "rawId", snapshot.RawId, "error", err)
 	}
 }
 
@@ -452,7 +456,7 @@ func (nd *netDiscovery) handleAnnounce(event discovery.Event) {
 
 	var announcements []discovery.EntityAnnouncement
 	if err := json.Unmarshal(event.Envelope.Body, &announcements); err != nil {
-		fmt.Printf("netDiscovery: malformed announce body from %s: %v\n", event.Sender, err)
+		nd.log.Warn("malformed announce body", "sender", event.Sender, "error", err)
 		return
 	}
 
@@ -464,8 +468,7 @@ func (nd *netDiscovery) handleAnnounce(event discovery.Event) {
 func (nd *netDiscovery) applyAnnouncement(event discovery.Event, announcement discovery.EntityAnnouncement) {
 	decodedState, err := decodeAnnouncementState(announcement)
 	if err != nil {
-		fmt.Printf("netDiscovery: unable to decode %s %q from %s: %v\n",
-			announcement.EntityKind, announcement.EntityId, event.Sender, err)
+		nd.log.Error("unable to decode", "entityKind", announcement.EntityKind, "entityId", announcement.EntityId, "sender", event.Sender, "error", err)
 		return
 	}
 
@@ -479,8 +482,7 @@ func (nd *netDiscovery) applyAnnouncement(event discovery.Event, announcement di
 	// state back until the next announce. A peer that doesn't send AsOf is always applied.
 	if !announcement.AsOf.IsZero() {
 		if announcement.AsOf.Before(meta.lastAsOf) {
-			fmt.Printf("netDiscovery: dropping stale announce for %s %q from %s (as of %s, already applied %s)\n",
-				announcement.EntityKind, announcement.EntityId, event.Sender, announcement.AsOf, meta.lastAsOf)
+			nd.log.Warn("dropping stale announce", "entityKind", announcement.EntityKind, "entityId", announcement.EntityId, "sender", event.Sender, "asOf", announcement.AsOf, "lastAsOf", meta.lastAsOf)
 			return
 		}
 
@@ -491,8 +493,7 @@ func (nd *netDiscovery) applyAnnouncement(event discovery.Event, announcement di
 		err := nd.sink.ApplyRemoteAnnouncement(
 			event.Sender, announcement.EntityKind, announcement.EntityId, announcement.Name, decodedState, announcement.AsOf)
 		if err != nil {
-			fmt.Printf("netDiscovery: unable to apply %s %q from %s: %v\n",
-				announcement.EntityKind, announcement.EntityId, event.Sender, err)
+			nd.log.Error("unable to apply", "entityKind", announcement.EntityKind, "entityId", announcement.EntityId, "sender", event.Sender, "error", err)
 		}
 	})
 }
@@ -550,7 +551,7 @@ func (nd *netDiscovery) handleGoodbye(event discovery.Event) {
 
 	nd.postToPlugin(func() {
 		if err := nd.sink.RemoveRemoteEntitiesFromSender(event.Sender); err != nil {
-			fmt.Printf("netDiscovery: unable to remove entities from %s: %v\n", event.Sender, err)
+			nd.log.Error("unable to remove entities", "sender", event.Sender, "error", err)
 		}
 	})
 }
@@ -579,11 +580,11 @@ func (nd *netDiscovery) sweepStale() {
 		return
 	}
 
-	fmt.Printf("netDiscovery: %d entities not seen since %s, removing\n", len(stale), cutoff)
+	nd.log.Debug("entities not seen, removing", "count", len(stale), "cutoff", cutoff)
 
 	nd.postToPlugin(func() {
 		if err := nd.sink.RemoveStaleRemoteEntities(stale); err != nil {
-			fmt.Printf("netDiscovery: unable to remove stale entities: %v\n", err)
+			nd.log.Warn("unable to remove stale entities", "error", err)
 		}
 	})
 }
@@ -592,7 +593,7 @@ func (nd *netDiscovery) sweepStale() {
 // (see netDiscovery.runOnPlugin), so successive calls reach the plugin in order.
 func (nd *netDiscovery) postToPlugin(f func()) {
 	if err := nd.runOnPlugin(f); err != nil {
-		fmt.Printf("netDiscovery: unable to run on plugin: %v\n", err)
+		nd.log.Error("unable to run on plugin", "error", err)
 	}
 }
 

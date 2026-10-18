@@ -2,6 +2,7 @@ package thermometer
 
 import (
 	"fmt"
+	"github.com/avanha/pmaas-spi/logging"
 	"reflect"
 	"time"
 
@@ -46,6 +47,7 @@ type WirelessThermometer struct {
 func (wt *WirelessThermometer) GetStub(container spi.IPMAASContainer) entities.WirelessThermometer {
 	if wt.stub == nil {
 		wt.stub = newWirelessThermometerStub(
+			logging.For(container, "stub"),
 			wt.Id,
 			&spicommon.ThreadSafeEntityWrapper[entities.WirelessThermometer]{
 				Container: container,

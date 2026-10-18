@@ -3,7 +3,9 @@ package environment
 import (
 	"errors"
 	"fmt"
+	"github.com/avanha/pmaas-spi/logging"
 	"io/fs"
+	"log/slog"
 	"reflect"
 	"strings"
 
@@ -47,6 +49,7 @@ func (s *state) nextEntityId() int {
 }
 
 type plugin struct {
+	log         *slog.Logger
 	config      PluginConfig
 	state       state
 	httpHandler *httphandler.Handler
@@ -57,7 +60,6 @@ type Plugin interface {
 }
 
 func NewPlugin(config PluginConfig) Plugin {
-	fmt.Printf("New, config: %v\n", config)
 	instance := &plugin{
 		config: config,
 		state: state{
@@ -81,11 +83,12 @@ func (p *plugin) ShortName() string {
 
 func (p *plugin) Init(container spi.IPMAASContainer) {
 	p.state.container = container
+	p.log = logging.For(container)
 	p.httpHandler.Init(container, &entityStoreAdapter{parent: p})
 }
 
 func (p *plugin) Start() {
-	fmt.Printf("%T Starting...\n", *p)
+	p.log.Info("starting")
 
 	// Handlers first, then the scan: an entity registered between the two is seen by both, which
 	// processEntity tolerates, whereas the reverse order could miss it entirely.
@@ -100,7 +103,7 @@ func (p *plugin) Start() {
 // on, closing it once that's finished. The plugin goroutine stays free to run whatever discovery
 // still hands it (which does nothing, see state.stopped) in the meantime.
 func (p *plugin) Stop() chan func() {
-	fmt.Printf("%T Stopping...\n", *p)
+	p.log.Info("stopping")
 
 	p.state.stopped = true
 
@@ -131,7 +134,7 @@ func (p *plugin) Stop() chan func() {
 func (p *plugin) deregisterEventHandlers() {
 	for name, handle := range p.state.eventReceiverHandles {
 		if err := p.state.container.DeregisterEventReceiver(handle); err != nil {
-			fmt.Printf("%T Stop: unable to deregister event receiver %s: %v\n", *p, name, err)
+			p.log.Error("unable to deregister event receiver", "name", name, "error", err)
 		}
 	}
 
@@ -161,16 +164,16 @@ func (p *plugin) startNetDiscovery() {
 		// Without the persisted id we can't tell "first run" from "couldn't read it", and guessing
 		// would mint a new identity and overwrite the saved one, making every peer see this node
 		// as brand new.
-		fmt.Printf("%T WARNING: not starting net discovery, unable to load persisted config: %v\n", *p, err)
+		p.log.Warn("not starting net discovery, unable to load persisted config", "error", err)
 		return
 	}
 
-	nd, err := newNetDiscovery(instanceID, netDiscoveryConfig, p, p.state.container.EnqueueOnPluginGoRoutine)
+	nd, err := newNetDiscovery(logging.For(p.state.container, "netdiscovery"), instanceID, netDiscoveryConfig, p, p.state.container.EnqueueOnPluginGoRoutine)
 	if err != nil {
 		// Net discovery is an optional add-on to a plugin that's otherwise fully functional
 		// without it (local entities still work), so a misconfigured/unavailable network
 		// interface here shouldn't take the whole plugin down - log and continue without it.
-		fmt.Printf("%T startNetDiscovery: unable to start (continuing without it): %v\n", *p, err)
+		p.log.Error("unable to start net discovery, continuing without it", "error", err)
 		return
 	}
 
@@ -197,11 +200,11 @@ func (p *plugin) postToNetDiscovery(f func(nd *netDiscovery) error) {
 
 	err := p.state.netOutbox.Post(func() {
 		if err := f(nd); err != nil {
-			fmt.Printf("%T netDiscovery update failed: %v\n", *p, err)
+			p.log.Error("netDiscovery update failed", "error", err)
 		}
 	})
 	if err != nil {
-		fmt.Printf("%T netDiscovery update not queued: %v\n", *p, err)
+		p.log.Debug("netDiscovery update not queued", "error", err)
 	}
 }
 
@@ -243,7 +246,7 @@ func (p *plugin) loadOrCreateSenderId() (discovery.InstanceID, error) {
 		NetDiscoverySenderId: string(senderId),
 	})
 	if err != nil {
-		fmt.Printf("%T loadOrCreateSenderId: unable to persist new sender id: %v\n", *p, err)
+		p.log.Error("unable to persist new sender id", "error", err)
 	}
 
 	return senderId, nil
@@ -345,7 +348,7 @@ func (p *plugin) scanCurrentEntities() {
 			return isCompatibleEntityType(info.EntityType)
 		})
 	if err != nil {
-		fmt.Printf("%T scanCurrentEntities: unable to scan registered entities: %v\n", *p, err)
+		p.log.Error("unable to scan registered entities", "error", err)
 		return
 	}
 
@@ -359,7 +362,7 @@ func (p *plugin) onEntityRegistered(eventInfo *events.EventInfo) error {
 		return nil
 	}
 
-	fmt.Printf("%T onEntityRegistered(%v)\n", *p, eventInfo)
+	p.log.Debug("entity registered", "event", eventInfo)
 	event := eventInfo.Event.(events.EntityRegisteredEvent)
 	p.processEntity(event.Id, event.EntityType, event.Name, event.StubFactoryFn)
 
@@ -410,7 +413,7 @@ func (p *plugin) loadInitialState(id string, tracked common.IStateTracker, sourc
 
 	sourceStub, err := sourceStubFactory()
 	if err != nil {
-		fmt.Printf("%T loadInitialState: unable to create stub for %s: %v\n", *p, id, err)
+		p.log.Error("unable to create stub for initial state", "id", id, "error", err)
 		return
 	}
 
@@ -426,14 +429,14 @@ func (p *plugin) loadInitialState(id string, tracked common.IStateTracker, sourc
 	}
 
 	if err := p.applyState(tracked, initialState); err != nil {
-		fmt.Printf("%T loadInitialState: unable to apply initial state for %s: %v\n", *p, id, err)
+		p.log.Error("unable to apply initial state", "id", id, "error", err)
 	}
 }
 
 func (p *plugin) applyState(tracked common.IStateTracker, newState any) error {
 	return tracked.ProcessNewState(newState, func(pmaasEntityId string, event any) {
 		if err := p.state.container.BroadcastEvent(pmaasEntityId, event); err != nil {
-			fmt.Printf("%T Error broadcasting event %v: %v\n", *p, event, err)
+			p.log.Error("error broadcasting event", "event", event, "error", err)
 		}
 	})
 }
@@ -483,7 +486,7 @@ func (p *plugin) registerWirelessThermometer(id string, name string) common.ISta
 	if err != nil {
 		// Don't track an entity the container doesn't know about: it would have no PmaasEntityId,
 		// so any event published for it would carry an empty id.
-		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
+		p.log.Error("device could not be registered", "id", instance.Id, "error", err)
 		return nil
 	}
 
@@ -513,7 +516,7 @@ func (p *plugin) registerThermostat(id string, name string) common.IStateTracker
 
 	if err != nil {
 		// See registerWirelessThermometer.
-		fmt.Printf("Device %s could not be registered: %v\n", instance.Id, err)
+		p.log.Error("device could not be registered", "id", instance.Id, "error", err)
 		return nil
 	}
 
@@ -545,7 +548,7 @@ func (p *plugin) onEntityDeregistered(eventInfo *events.EventInfo) error {
 		return nil
 	}
 
-	fmt.Printf("%T onEntityDeregistered(%v)\n", *p, eventInfo)
+	p.log.Debug("entity deregistered", "event", eventInfo)
 	p.removeEntity(event.Id)
 
 	p.postToNetDiscovery(func(nd *netDiscovery) error { return nd.EntityRemoved(event.Id) })
@@ -554,7 +557,7 @@ func (p *plugin) onEntityDeregistered(eventInfo *events.EventInfo) error {
 }
 
 func (p *plugin) onEntityStateChanged(eventInfo *events.EventInfo) error {
-	fmt.Printf("%T onEntityStateChanged(%v)\n", *p, eventInfo)
+	p.log.Debug("entity state changed", "event", eventInfo)
 	event := eventInfo.Event.(events.EntityStateChangedEvent)
 	sourceEntityId := event.Id
 	entity, ok := p.state.entities[sourceEntityId]

@@ -4,8 +4,10 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"github.com/avanha/pmaas-spi/logging"
 	"html/template"
 	"io"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"sort"
@@ -55,6 +57,7 @@ var listRenderOptions = spi.RenderListOptions{
 // the entity renderers registered for it. It reaches back into the plugin only through
 // entityStore - see common.EntityStore.
 type Handler struct {
+	log         *slog.Logger
 	container   spi.IPMAASContainer
 	entityStore common.EntityStore
 }
@@ -65,6 +68,7 @@ func NewHandler() *Handler {
 
 func (h *Handler) Init(container spi.IPMAASContainer, entityStore common.EntityStore) {
 	h.container = container
+	h.log = logging.For(container, "http")
 	h.entityStore = entityStore
 
 	container.ProvideContentFS(&contentFS, "content")
@@ -81,7 +85,7 @@ func (h *Handler) handleHttpListRequest(w http.ResponseWriter, r *http.Request) 
 	// arbitrary goroutines, so this is how we get all states atomically.
 	items, err := h.entityStore.GetEntities()
 	if err != nil {
-		fmt.Printf("environment.http handleHttpListRequest: Error retrieving entities: %s\n", err)
+		h.log.Error("error retrieving entities", "error", err)
 		items = nil
 	}
 
@@ -98,7 +102,7 @@ func (h *Handler) handleHttpListRequest(w http.ResponseWriter, r *http.Request) 
 		case thermometer.Thermostat:
 			itemRefs = append(itemRefs, &typedItem)
 		default:
-			fmt.Printf("environment.http handleHttpListRequest: skipping unexpected entity type %T\n", item)
+			h.log.Warn("skipping unexpected entity type", "type", fmt.Sprintf("%T", item))
 		}
 	}
 

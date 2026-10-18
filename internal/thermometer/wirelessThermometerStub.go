@@ -2,6 +2,7 @@ package thermometer
 
 import (
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 
 	"github.com/avanha/pmaas-plugin-environment/entities"
@@ -10,6 +11,7 @@ import (
 )
 
 type wirelessThermometerStub struct {
+	log                    *slog.Logger
 	id                     string
 	closeFn                func() error
 	entityWrapperReference atomic.Pointer[common.ThreadSafeEntityWrapper[entities.WirelessThermometer]]
@@ -34,10 +36,12 @@ func (s *wirelessThermometerStub) GetSortKey() string {
 }
 
 func newWirelessThermometerStub(
+	log *slog.Logger,
 	id string,
 	entityWrapper *common.ThreadSafeEntityWrapper[entities.WirelessThermometer]) *wirelessThermometerStub {
 	instance := &wirelessThermometerStub{
-		id: id,
+		log: log,
+		id:  id,
 	}
 
 	instance.entityWrapperReference.Store(entityWrapper)
@@ -64,6 +68,6 @@ func (s *wirelessThermometerStub) close() {
 	err := closeFn()
 
 	if err != nil {
-		fmt.Printf("Failed to close wirelessThermometer stub %s: %v", s.id, err)
+		s.log.Error("failed to close wirelessThermometer stub", "id", s.id, "error", err)
 	}
 }

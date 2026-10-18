@@ -129,7 +129,7 @@ func (p *plugin) createRemoteWirelessThermometer(id string, name string) *thermo
 	pmaasEntityId, err := p.state.container.RegisterEntity(
 		instance.Id, entities.WirelessThermometerType, instance.Name, stubFactoryFn)
 	if err != nil {
-		fmt.Printf("%T createRemoteWirelessThermometer: %s could not be registered: %v\n", *p, id, err)
+		p.log.Error("remote wireless thermometer could not be registered", "id", id, "error", err)
 		return nil
 	}
 
@@ -150,7 +150,7 @@ func (p *plugin) createRemoteThermostat(id string, name string) *thermometer.The
 	pmaasEntityId, err := p.state.container.RegisterEntity(
 		instance.Id, entities.ThermostatType, instance.Name, stubFactoryFn)
 	if err != nil {
-		fmt.Printf("%T createRemoteThermostat: %s could not be registered: %v\n", *p, id, err)
+		p.log.Error("remote thermostat could not be registered", "id", id, "error", err)
 		return nil
 	}
 
@@ -187,7 +187,7 @@ func (p *plugin) removeEntity(id string) {
 
 	if pmaasEntityId := tracked.GetPmaasEntityId(); pmaasEntityId != "" {
 		if err := p.state.container.DeregisterEntity(pmaasEntityId); err != nil {
-			fmt.Printf("%T removeEntity: unable to deregister %s: %v\n", *p, id, err)
+			p.log.Error("unable to deregister entity", "id", id, "error", err)
 		}
 	}
 

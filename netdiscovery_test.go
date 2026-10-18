@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -52,6 +53,7 @@ func newTestAnnouncement(t *testing.T, asOf time.Time) discovery.EntityAnnouncem
 func TestApplyAnnouncement_DropsOutOfOrder(t *testing.T) {
 	sink := &recordingSink{}
 	nd := &netDiscovery{
+		log:         slog.New(slog.DiscardHandler),
 		sink:        sink,
 		remoteMeta:  make(map[discovery.InstanceID]map[string]*remoteEntityMeta),
 		runOnPlugin: func(f func()) error { f(); return nil },
@@ -88,7 +90,7 @@ func (c *configContainer) SaveConfig(cfg any) error {
 }
 
 func newConfigPlugin(container spi.IPMAASContainer) *plugin {
-	p := &plugin{}
+	p := &plugin{log: slog.New(slog.DiscardHandler)}
 	p.state.container = container
 	return p
 }
@@ -148,6 +150,7 @@ func TestNetDiscovery_NoDeadlockBetweenPluginAndDiscoveryGoroutines(t *testing.T
 
 	var sink recordingSink
 	nd := &netDiscovery{
+		log:           slog.New(slog.DiscardHandler),
 		sink:          &sink,
 		mailbox:       mailbox.NewMailbox(),
 		remoteMeta:    make(map[discovery.InstanceID]map[string]*remoteEntityMeta),
@@ -217,6 +220,7 @@ func TestNetDiscovery_NoDeadlockBetweenPluginAndDiscoveryGoroutines(t *testing.T
 
 func TestNetDiscovery_RemovedEntityStopsBeingAdvertised(t *testing.T) {
 	nd := &netDiscovery{
+		log:           slog.New(slog.DiscardHandler),
 		sink:          &recordingSink{},
 		mailbox:       mailbox.NewMailbox(),
 		remoteMeta:    make(map[discovery.InstanceID]map[string]*remoteEntityMeta),

@@ -2,6 +2,7 @@ package thermometer
 
 import (
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 
 	"github.com/avanha/pmaas-plugin-environment/entities"
@@ -10,6 +11,7 @@ import (
 )
 
 type thermostatStub struct {
+	log                    *slog.Logger
 	id                     string
 	closeFn                func() error
 	entityWrapperReference atomic.Pointer[common.ThreadSafeEntityWrapper[entities.Thermostat]]
@@ -34,10 +36,12 @@ func (s *thermostatStub) GetSortKey() string {
 }
 
 func newThermostatStub(
+	log *slog.Logger,
 	id string,
 	entityWrapper *common.ThreadSafeEntityWrapper[entities.Thermostat]) *thermostatStub {
 	instance := &thermostatStub{
-		id: id,
+		log: log,
+		id:  id,
 	}
 
 	instance.entityWrapperReference.Store(entityWrapper)
@@ -64,6 +68,6 @@ func (s *thermostatStub) close() {
 	err := closeFn()
 
 	if err != nil {
-		fmt.Printf("Failed to close thermostat stub %s: %v", s.id, err)
+		s.log.Error("failed to close thermostat stub", "id", s.id, "error", err)
 	}
 }
