@@ -176,6 +176,7 @@ func newNetDiscovery(
 	}
 
 	transport, err := discovery.NewTransport(instanceID, discovery.Config{
+		Logger:        log,
 		GroupAddress:  config.GroupAddress,
 		InterfaceName: config.InterfaceName,
 		EnableSend:    config.EnableAnnounce || config.EnableDiscover,
