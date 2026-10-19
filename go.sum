@@ -1,7 +1,7 @@
 github.com/avanha/pmaas-common v0.0.5 h1:QeTvLZ4guLM58pKqpwdCh+rStbsVXLKNRjqGy9zrSb0=
 github.com/avanha/pmaas-common v0.0.5/go.mod h1:XkhgGSpKVnLrNbsuQLcuxzczTeMrf+FDZBhfxA+nJAY=
-github.com/avanha/pmaas-spi v0.0.14 h1:JIrxgl7Sc3etANISIyYPP86m/MstvG4YmnXf9PpfK28=
-github.com/avanha/pmaas-spi v0.0.14/go.mod h1:vKV8Ke5QXei42A4agIgxypbznjLqFQyi2hvqSyoe7c0=
+github.com/avanha/pmaas-spi v0.0.20 h1:+1DXuFL3dNRGBHrtftZobgDCp84gn700UyhrAhctDyQ=
+github.com/avanha/pmaas-spi v0.0.20/go.mod h1:vKV8Ke5QXei42A4agIgxypbznjLqFQyi2hvqSyoe7c0=
 golang.org/x/net v0.59.0 h1:5zfYln+w5XCxwrnMMJPufRgNoXEaGxl0wo5GqPXyues=
 golang.org/x/net v0.59.0/go.mod h1:2DA/G1UfVbCpQPeWTmMPGY7Cs2PkBkwu743bVX5PIVg=
 golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
