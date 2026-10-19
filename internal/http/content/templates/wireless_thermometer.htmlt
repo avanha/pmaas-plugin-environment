@@ -25,12 +25,12 @@
         <div>Waiting for data</div>
     {{else}}
         <div class="sensor-data">
-            <div class="temp-celsius">{{printf "%.2f" .SensorData.Temperature}} C</div>
-            <div class="temp-fahrenheit">{{CelsiusToFahrenheit .SensorData.Temperature | printf "%.2f"}} F</div>
+            <div class="temp-celsius">{{Temperature .SensorData.Temperature}} C</div>
+            <div class="temp-fahrenheit">{{Fahrenheit .SensorData.Temperature}} F</div>
             {{if .SensorData.HasHumidity}}
                 <div class="humidity">
                     <span class="label"><i class="bi bi-droplet-fill"></i></span>
-                    <span class="value">{{.SensorData.Humidity}}%</span>
+                    <span class="value">{{Humidity .SensorData.Humidity}}%</span>
                 </div>
             {{end}}
             <div class="timestamp">
@@ -40,13 +40,13 @@
         </div>
         <div class="extremes">
             <div class="temp high">
-                <div class="temp-data celsius">{{printf "%.2f" .HighTemperature}} C</div>
-                <div class="temp-data fahrenheit">{{CelsiusToFahrenheit .HighTemperature | printf "%.2f"}} F</div>
+                <div class="temp-data celsius">{{Temperature .HighTemperature}} C</div>
+                <div class="temp-data fahrenheit">{{Fahrenheit .HighTemperature}} F</div>
                 <div class="timestamp">{{FormatClock .HighTemperatureTime}}</div>
             </div>
             <div class="temp low">
-                <div class="temp-data celsius">{{printf "%.2f" .LowTemperature}} C</div>
-                <div class="temp-data fahrenheit">{{CelsiusToFahrenheit .LowTemperature | printf "%.2f"}} F</div>
+                <div class="temp-data celsius">{{Temperature .LowTemperature}} C</div>
+                <div class="temp-data fahrenheit">{{Fahrenheit .LowTemperature}} F</div>
                 <div class="timestamp">{{FormatClock .LowTemperatureTime}}</div>
             </div>
         </div>

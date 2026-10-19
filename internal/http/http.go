@@ -26,12 +26,12 @@ var contentFS embed.FS
 var wirelessThermometerTemplate = spi.TemplateInfo{
 	Name: "environment_wireless_thermometer",
 	FuncMap: template.FuncMap{
-		"CelsiusToFahrenheit": celsiusToFahrenheit,
-		"RelativeTime":        format.Terse,
-		"FormatClock":         formatClock,
-		"IsStale":             isStale,
-		"IsLowBattery":        isLowBattery,
-		"BatteryIcon":         batteryIcon,
+		"Temperature": format.Temperature, "Fahrenheit": format.Fahrenheit, "Humidity": format.Humidity,
+		"RelativeTime": format.Terse,
+		"FormatClock":  formatClock,
+		"IsStale":      isStale,
+		"IsLowBattery": isLowBattery,
+		"BatteryIcon":  batteryIcon,
 	},
 	Paths:  []string{"templates/wireless_thermometer.htmlt"},
 	Styles: []string{"css/wireless_thermometer.css"},
@@ -40,7 +40,7 @@ var wirelessThermometerTemplate = spi.TemplateInfo{
 var thermostatTemplate = spi.TemplateInfo{
 	Name: "environment_thermostat",
 	FuncMap: template.FuncMap{
-		"CelsiusToFahrenheit":    celsiusToFahrenheit,
+		"Temperature": format.Temperature, "Fahrenheit": format.Fahrenheit, "Humidity": format.Humidity,
 		"RelativeTime":           format.Terse,
 		"FormatClock":            formatClock,
 		"IsOffline":              isOffline,
@@ -186,10 +186,6 @@ func (h *Handler) thermostatRendererFactory() (spi.EntityRenderer, error) {
 	}
 
 	return spi.EntityRenderer{StreamingRenderFunc: renderer, Styles: compiledTemplate.Styles, Scripts: compiledTemplate.Scripts}, nil
-}
-
-func celsiusToFahrenheit(celsiusValue float32) float32 {
-	return celsiusValue*float32(9)/float32(5) + float32(32)
 }
 
 func isOffline(connectivity environmental.Connectivity) bool {
