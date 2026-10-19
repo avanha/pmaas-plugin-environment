@@ -4,6 +4,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"github.com/avanha/pmaas-spi/format"
 	"github.com/avanha/pmaas-spi/logging"
 	"html/template"
 	"io"
@@ -26,7 +27,7 @@ var wirelessThermometerTemplate = spi.TemplateInfo{
 	Name: "environment_wireless_thermometer",
 	FuncMap: template.FuncMap{
 		"CelsiusToFahrenheit": celsiusToFahrenheit,
-		"RelativeTime":        relativeTime,
+		"RelativeTime":        format.Terse,
 		"FormatClock":         formatClock,
 		"IsStale":             isStale,
 		"IsLowBattery":        isLowBattery,
@@ -40,7 +41,7 @@ var thermostatTemplate = spi.TemplateInfo{
 	Name: "environment_thermostat",
 	FuncMap: template.FuncMap{
 		"CelsiusToFahrenheit":    celsiusToFahrenheit,
-		"RelativeTime":           relativeTime,
+		"RelativeTime":           format.Terse,
 		"FormatClock":            formatClock,
 		"IsOffline":              isOffline,
 		"IsOnline":               isOnline,
@@ -236,36 +237,6 @@ func batteryIcon(level int) string {
 
 func isLowBattery(level int) bool {
 	return level < lowBatteryThreshold
-}
-
-func relativeTime(timeValue time.Time) string {
-	if timeValue.IsZero() {
-		return "never"
-	}
-
-	elapsed := time.Since(timeValue).Truncate(time.Second)
-
-	if elapsed.Seconds() < 30 {
-		return "< 30s"
-	}
-
-	if elapsed.Seconds() < 60 {
-		return "< 1m"
-	}
-
-	elapsed = elapsed.Truncate(time.Minute)
-
-	if elapsed.Minutes() < 60 {
-		return fmt.Sprintf("%vm", elapsed.Minutes())
-	}
-
-	elapsed = elapsed.Truncate(time.Hour)
-
-	if elapsed.Hours() < 48 {
-		return fmt.Sprintf("%vh", elapsed.Hours())
-	}
-
-	return fmt.Sprintf("%vd", int(elapsed.Hours()/24))
 }
 
 // formatClock renders a time of day for the high/low extremes, or nothing for a time that was

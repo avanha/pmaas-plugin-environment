@@ -24,26 +24,6 @@ func TestSortBySortKey_UnsortableItemsGoLastInOriginalOrder(t *testing.T) {
 	}
 }
 
-func TestRelativeTime(t *testing.T) {
-	cases := []struct {
-		name string
-		in   time.Time
-		want string
-	}{
-		{"zero", time.Time{}, "never"},
-		{"recent", time.Now().Add(-5 * time.Second), "< 30s"},
-		{"minutes", time.Now().Add(-5*time.Minute - 10*time.Second), "5m"},
-		{"hours", time.Now().Add(-3*time.Hour - time.Minute), "3h"},
-		{"days", time.Now().Add(-72*time.Hour - time.Minute), "3d"},
-	}
-
-	for _, c := range cases {
-		if got := relativeTime(c.in); got != c.want {
-			t.Errorf("%s: relativeTime = %q, want %q", c.name, got, c.want)
-		}
-	}
-}
-
 func TestFormatClock_ZeroIsEmpty(t *testing.T) {
 	if got := formatClock(time.Time{}); got != "" {
 		t.Fatalf("expected empty string, got %q", got)
