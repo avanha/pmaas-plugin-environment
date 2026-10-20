@@ -532,6 +532,14 @@ func (p *plugin) registerThermostat(id string, name string) common.IStateTracker
 	return instance
 }
 
+// pointerTo is a pointer to a copy of the value, which is what the card renderers are given.
+func pointerTo(value any) any {
+	pointer := reflect.New(reflect.TypeOf(value))
+	pointer.Elem().Set(reflect.ValueOf(value))
+
+	return pointer.Interface()
+}
+
 // giveView gives the entity the view of its card, for a page that lists the entities of many plugins (the groups plugin's). The card
 // covers the source's own, which has less on it.
 func (p *plugin) giveView(sourceId string, entityId string, tracked common.IStateTracker) {
@@ -540,7 +548,7 @@ func (p *plugin) giveView(sourceId string, entityId string, tracked common.IStat
 			Key:      "environment/" + sourceId,
 			Category: group.CategoryThermometers,
 			Covers:   []string{sourceId},
-			Value:    tracked.GetState(),
+			Value:    pointerTo(tracked.GetState()),
 		}, nil
 	})
 

@@ -69,7 +69,7 @@ func TestOf_IsTheEntityThatHostsTheSourceOnceItIsRegisteredAndHasACardThatCovers
 	}
 
 	if view.Key != "environment/bluetooth_1" || view.Category != group.CategoryThermometers ||
-		!reflect.DeepEqual(view.Covers, []string{"bluetooth_1"}) || view.Value == nil {
+		!reflect.DeepEqual(view.Covers, []string{"bluetooth_1"}) || reflect.TypeOf(view.Value).Kind() != reflect.Pointer {
 		t.Errorf("%#v", view)
 	}
 
