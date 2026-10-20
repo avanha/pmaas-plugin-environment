@@ -1,5 +1,7 @@
 package environment
 
+import "github.com/avanha/pmaas-spi/entity"
+
 // NetDiscoveryConfig controls this plugin's optional multicast peer discovery: broadcasting
 // the entities this instance knows about to the local network, and/or listening for other
 // instances doing the same. See netdiscovery.go. Its zero value (both flags false) leaves net
@@ -34,8 +36,25 @@ type NetDiscoveryConfig struct {
 
 type PluginConfig struct {
 	NetDiscovery NetDiscoveryConfig
+
+	hosted *hostedEntities
 }
 
 func NewPluginConfig() PluginConfig {
-	return PluginConfig{}
+	return PluginConfig{hosted: newHostedEntities()}
+}
+
+// Of is the entity of this plugin that shows the source: a thermometer or thermostat another plugin registered, which is what a
+// plugin's config gave back for it (a bluetooth.ThermometerHandle, a nest ThermostatHandle). This plugin's card for it has more on it
+// than the source's own, so a group holds this when it should show that. Use it with NewPluginConfig's result.
+func (c PluginConfig) Of(source entity.Ref) entity.Ref {
+	if c.hosted == nil {
+		panic("environment: Of needs a config from NewPluginConfig")
+	}
+
+	if source == nil {
+		panic("environment: Of was given a nil source")
+	}
+
+	return &hostedRef{source: source, hosted: c.hosted}
 }

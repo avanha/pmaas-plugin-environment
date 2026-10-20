@@ -192,6 +192,7 @@ func (p *plugin) removeEntity(id string) {
 	}
 
 	tracked.CloseStubIfPresent()
+	p.config.hosted.remove(id)
 	delete(p.state.entities, id)
 }
 

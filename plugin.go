@@ -20,6 +20,7 @@ import (
 	"github.com/avanha/pmaas-spi/entity"
 	environmental "github.com/avanha/pmaas-spi/environment"
 	"github.com/avanha/pmaas-spi/events"
+	"github.com/avanha/pmaas-spi/group"
 	"github.com/avanha/pmaas-spi/tracking"
 
 	"github.com/avanha/pmaas-spi"
@@ -492,6 +493,8 @@ func (p *plugin) registerWirelessThermometer(id string, name string) common.ISta
 
 	instance.PmaasEntityId = pmaasEntityId
 	p.state.entities[id] = instance
+	p.config.hosted.set(id, pmaasEntityId)
+	p.giveView(id, pmaasEntityId, instance)
 	p.notifyEntityChanged(id)
 
 	return instance
@@ -522,9 +525,28 @@ func (p *plugin) registerThermostat(id string, name string) common.IStateTracker
 
 	instance.PmaasEntityId = pmaasEntityId
 	p.state.entities[id] = instance
+	p.config.hosted.set(id, pmaasEntityId)
+	p.giveView(id, pmaasEntityId, instance)
 	p.notifyEntityChanged(id)
 
 	return instance
+}
+
+// giveView gives the entity the view of its card, for a page that lists the entities of many plugins (the groups plugin's). The card
+// covers the source's own, which has less on it.
+func (p *plugin) giveView(sourceId string, entityId string, tracked common.IStateTracker) {
+	err := p.state.container.RegisterEntityView(entityId, func() (spi.EntityView, error) {
+		return spi.EntityView{
+			Key:      "environment/" + sourceId,
+			Category: group.CategoryThermometers,
+			Covers:   []string{sourceId},
+			Value:    tracked.GetState(),
+		}, nil
+	})
+
+	if err != nil {
+		p.log.Error("unable to give the entity a view", "id", sourceId, "error", err)
+	}
 }
 
 func buildTrackingName(prefix string, name string) string {
