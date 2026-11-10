@@ -83,8 +83,14 @@
     font-size: 15pt;
 }
 
+/* Cards must keep a constant height, so nothing in this row may ever wrap. The gaps are kept tight so
+   the widest case (HEATCOOL's "heat - cool C" setpoint range plus humidity) still fits on one line. */
+.entity-environment-thermostat .sensor-data div {
+    white-space: nowrap;
+}
+
 .entity-environment-thermostat .sensor-data div:not(:first-child) {
-    margin-left: 20px;
+    margin-left: 10px;
 }
 
 .entity-environment-thermostat .sensor-data .temp-celsius {
@@ -92,7 +98,7 @@
 }
 
 .entity-environment-thermostat .sensor-data .temp-fahrenheit {
-    margin-left: 10px !important;
+    margin-left: 6px !important;
 }
 
 .entity-environment-thermostat .sensor-data .setpoint .heat {
