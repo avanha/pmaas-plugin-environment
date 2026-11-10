@@ -32,7 +32,7 @@
             {{end}}
             {{if eq .Mode "HEATCOOL"}}
                 <div class="setpoint">
-                    <span class="value heat">{{Temperature .HeatSetpoint}}</span><span class="separator"> - </span><span class="value cool">{{Temperature .CoolSetpoint}}</span> C
+                    <span class="value heat">{{Temperature .HeatSetpoint}}</span><span class="separator"> - </span><span class="value cool">{{Temperature .CoolSetpoint}} C</span>
                 </div>
             {{else if eq .Mode "HEAT"}}
                 <div class="setpoint">
